@@ -1,6 +1,7 @@
 package com.example.singauto
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -9,6 +10,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -192,16 +194,56 @@ class MainActivity : AppCompatActivity() {
                 val normalizedVoice = normalizeAudio(voiceArray, 0.75f)
                 val mixedArray = mixAndMaster(normalizedVoice, musicArray)
 
-                val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-                if (!musicDir.exists()) musicDir.mkdirs()
+                // BULLETPROOF MODERN ANDROID SAVE (MediaStore API)
+                val fileName = "SingAuto_Perfect_${System.currentTimeMillis()}.wav"
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
+                    put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC)
+                    put(MediaStore.Audio.Media.IS_PENDING, 1)
+                }
                 
-                val outFile = File(musicDir, "SingAuto_Perfect_${System.currentTimeMillis()}.wav")
-                writeWav(outFile, mixedArray, sampleRate)
+                val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val itemUri = contentResolver.insert(collection, contentValues)
+                
+                if (itemUri != null) {
+                    contentResolver.openOutputStream(itemUri)?.use { outputStream ->
+                        val dataSize = mixedArray.size * 2
+                        val fileSize = dataSize + 36
+                        val header = ByteArray(44)
+                        
+                        "RIFF".toByteArray(Charsets.US_ASCII).copyInto(header, 0)
+                        writeInt(header, 4, fileSize)
+                        "WAVE".toByteArray(Charsets.US_ASCII).copyInto(header, 8)
+                        "fmt ".toByteArray(Charsets.US_ASCII).copyInto(header, 12)
+                        writeInt(header, 16, 16) 
+                        writeShort(header, 20, 1.toShort()) 
+                        writeShort(header, 22, 1.toShort()) 
+                        writeInt(header, 24, sampleRate)
+                        writeInt(header, 28, sampleRate * 2) 
+                        writeShort(header, 32, 2.toShort()) 
+                        writeShort(header, 34, 16.toShort()) 
+                        "data".toByteArray(Charsets.US_ASCII).copyInto(header, 36)
+                        writeInt(header, 40, dataSize)
 
-                runOnUiThread {
-                    tvStatus.text = "✅ Perfect Song Saved!\n${outFile.name}"
-                    btnSave.isEnabled = true
-                    Toast.makeText(this, "Saved to Music folder", Toast.LENGTH_LONG).show()
+                        outputStream.write(header)
+                        val buffer = ByteBuffer.allocate(dataSize).order(ByteOrder.LITTLE_ENDIAN)
+                        for (sample in mixedArray) buffer.putShort(sample)
+                        outputStream.write(buffer.array())
+                    }
+                    
+                    // Mark as no longer pending
+                    contentValues.clear()
+                    contentValues.put(MediaStore.Audio.Media.IS_PENDING, 0)
+                    contentResolver.update(itemUri, contentValues, null, null)
+                    
+                    runOnUiThread {
+                        tvStatus.text = "✅ Perfect Song Saved to Music!\n$fileName"
+                        btnSave.isEnabled = true
+                        Toast.makeText(this, "Saved to Music folder", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    throw Exception("Failed to create MediaStore entry")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -320,33 +362,6 @@ class MainActivity : AppCompatActivity() {
             mixed[i] = finalSample.toShort()
         }
         return mixed
-    }
-
-    private fun writeWav(file: File, data: ShortArray, sampleRate: Int) {
-        val dataSize = data.size * 2
-        val fileSize = dataSize + 36
-        val header = ByteArray(44)
-        
-        "RIFF".toByteArray(Charsets.US_ASCII).copyInto(header, 0)
-        writeInt(header, 4, fileSize)
-        "WAVE".toByteArray(Charsets.US_ASCII).copyInto(header, 8)
-        "fmt ".toByteArray(Charsets.US_ASCII).copyInto(header, 12)
-        writeInt(header, 16, 16) 
-        writeShort(header, 20, 1.toShort()) 
-        writeShort(header, 22, 1.toShort()) 
-        writeInt(header, 24, sampleRate)
-        writeInt(header, 28, sampleRate * 2) 
-        writeShort(header, 32, 2.toShort()) 
-        writeShort(header, 34, 16.toShort()) 
-        "data".toByteArray(Charsets.US_ASCII).copyInto(header, 36)
-        writeInt(header, 40, dataSize)
-
-        FileOutputStream(file).use { out ->
-            out.write(header)
-            val buffer = ByteBuffer.allocate(dataSize).order(ByteOrder.LITTLE_ENDIAN)
-            for (sample in data) buffer.putShort(sample)
-            out.write(buffer.array())
-        }
     }
 
     private fun writeInt(buffer: ByteArray, offset: Int, value: Int) {
