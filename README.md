@@ -15,7 +15,7 @@
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
 
-CHATGPT PROMPT:
+## CHATGPT PROMPT:
 
 You are an expert Android developer. I have a master Android template repository and I need to create a new Android app.
 
