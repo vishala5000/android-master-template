@@ -19,6 +19,13 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
+import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
 
@@ -130,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         audioRecord?.release()
         audioRecord = null
         
-        tvStatus.text = "Processing audio & adding music..."
+        tvStatus.text = "🎧 Mixing professional track..."
         fabRecord.setImageResource(android.R.drawable.ic_btn_speak_now)
         btnSave.isEnabled = true
     }
@@ -144,21 +151,23 @@ class MainActivity : AppCompatActivity() {
                 val voiceArray = ShortArray(voiceShorts.limit())
                 voiceShorts.get(voiceArray)
 
-                // Generate a 30-second background synth pad (C Major Chord)
-                val musicArray = generateSynthPad(30, sampleRate)
+                if (voiceArray.isEmpty()) {
+                    runOnUiThread { tvStatus.text = "❌ No audio recorded."; btnSave.isEnabled = true }
+                    return@execute
+                }
 
-                // Mix voice and music
-                val mixedArray = mixAudio(voiceArray, musicArray)
+                val musicArray = generateProfessionalTrack(voiceArray.size, sampleRate)
+                val normalizedVoice = normalizeAudio(voiceArray, 0.75f)
+                val mixedArray = mixAndMaster(normalizedVoice, musicArray)
 
-                // Save to Music folder
                 val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
                 if (!musicDir.exists()) musicDir.mkdirs()
                 
-                val outFile = File(musicDir, "SingAuto_${System.currentTimeMillis()}.wav")
+                val outFile = File(musicDir, "SingAuto_Perfect_${System.currentTimeMillis()}.wav")
                 writeWav(outFile, mixedArray, sampleRate)
 
                 runOnUiThread {
-                    tvStatus.text = "✅ Saved to Music folder!\n${outFile.name}"
+                    tvStatus.text = "✅ Perfect Song Saved!\n${outFile.name}"
                     btnSave.isEnabled = true
                     Toast.makeText(this, "Saved to Music folder", Toast.LENGTH_LONG).show()
                 }
@@ -172,32 +181,116 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun generateSynthPad(durationSec: Int, sampleRate: Int): ShortArray {
-        val totalSamples = durationSec * sampleRate
-        val samples = ShortArray(totalSamples)
-        val freqs = doubleArrayOf(261.63, 329.63, 392.00) // C, E, G
-        
-        for (i in 0 until totalSamples) {
-            var sample = 0.0
-            for (f in freqs) {
-                sample += Math.sin(2.0 * Math.PI * f * i / sampleRate)
-            }
-            sample /= freqs.size 
-            samples[i] = (sample * Short.MAX_VALUE * 0.4).toInt().toShort() // 40% volume
+    private fun normalizeAudio(audio: ShortArray, targetPeak: Float): ShortArray {
+        var maxPeak = 0
+        for (sample in audio) {
+            val absVal = abs(sample.toInt())
+            if (absVal > maxPeak) maxPeak = absVal
         }
-        return samples
+        if (maxPeak == 0) return audio
+        
+        val gain = (Short.MAX_VALUE * targetPeak) / maxPeak
+        val normalized = ShortArray(audio.size)
+        for (i in audio.indices) {
+            normalized[i] = (audio[i].toInt() * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return normalized
     }
 
-    private fun mixAudio(voice: ShortArray, music: ShortArray): ShortArray {
+    private fun generateProfessionalTrack(totalSamples: Int, sr: Int): ShortArray {
+        val track = FloatArray(totalSamples)
+        val bpm = 120.0
+        val beatDuration = 60.0 / bpm
+        
+        val chords = listOf(
+            listOf(130.81, 164.81, 196.00), // C
+            listOf(196.00, 246.94, 293.66), // G
+            listOf(220.00, 261.63, 329.63), // Am
+            listOf(174.61, 220.00, 261.63)  // F
+        )
+        val beatsPerChord = 4.0
+
+        for (i in 0 until totalSamples) {
+            val t = i.toDouble() / sr
+            val currentBeat = t / beatDuration
+            val chordIndex = (currentBeat / beatsPerChord).toInt() % chords.size
+            val beatInChord = currentBeat % beatsPerChord
+            
+            var padSample = 0.0
+            val chord = chords[chordIndex]
+            for (freq in chord) {
+                padSample += sin(2.0 * PI * freq * t) * 0.5
+                padSample += sin(2.0 * PI * freq * 2 * t) * 0.2
+                padSample += sin(2.0 * PI * freq * 3 * t) * 0.1
+            }
+            val padEnv = min(1.0, t / 1.5) 
+            padSample *= padEnv * 0.15 
+
+            var bassSample = 0.0
+            val bassFreq = chords[chordIndex][0] / 2 
+            val timeInBeat = currentBeat % 1.0
+            val bassEnv = exp(-timeInBeat * 8.0) 
+            bassSample = sin(2.0 * PI * bassFreq * t) * bassEnv * 0.4
+
+            var drumSample = 0.0
+            val beatFraction = currentBeat % 1.0
+            
+            if (currentBeat % 2 < 0.1 || (currentBeat % 2 > 0.9 && currentBeat % 2 < 1.0)) {
+                val kickT = (currentBeat % 1.0) * beatDuration
+                if (kickT < 0.3) {
+                    val kickFreq = 150 * exp(-kickT * 30) + 40
+                    val kickEnv = exp(-kickT * 10)
+                    drumSample += sin(2.0 * PI * kickFreq * kickT) * kickEnv * 0.6
+                }
+            }
+            
+            if ((currentBeat + 1) % 2 < 0.1) {
+                val snareT = ((currentBeat + 1) % 1.0) * beatDuration
+                if (snareT < 0.2) {
+                    val snareEnv = exp(-snareT * 15)
+                    drumSample += (Random.nextDouble() * 2 - 1) * snareEnv * 0.3 
+                }
+            }
+
+            if (beatFraction < 0.05 || (beatFraction > 0.45 && beatFraction < 0.55)) {
+                val hatT = (beatFraction % 0.5) * beatDuration
+                if (hatT < 0.05) {
+                    val hatEnv = exp(-hatT * 80)
+                    drumSample += (Random.nextDouble() * 2 - 1) * hatEnv * 0.15
+                }
+            }
+
+            track[i] = (padSample + bassSample + drumSample).toFloat()
+        }
+        
+        val shortTrack = ShortArray(totalSamples)
+        for (i in track.indices) {
+            shortTrack[i] = (track[i] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return shortTrack
+    }
+
+    private fun mixAndMaster(voice: ShortArray, music: ShortArray): ShortArray {
         val length = minOf(voice.size, music.size)
         val mixed = ShortArray(length)
+        val fadeSamples = sampleRate / 20 
+        
         for (i in 0 until length) {
             val sum = voice[i].toInt() + music[i].toInt()
-            mixed[i] = when {
+            val clipped = when {
                 sum > Short.MAX_VALUE -> Short.MAX_VALUE
                 sum < Short.MIN_VALUE -> Short.MIN_VALUE
                 else -> sum.toShort()
             }
+            
+            var finalSample = clipped.toInt()
+            if (i < fadeSamples) {
+                finalSample = (finalSample * (i.toDouble() / fadeSamples)).toInt()
+            } else if (i > length - fadeSamples) {
+                finalSample = (finalSample * ((length - i).toDouble() / fadeSamples)).toInt()
+            }
+            
+            mixed[i] = finalSample.toShort()
         }
         return mixed
     }
