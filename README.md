@@ -75,37 +75,32 @@ Question 1: "What is your APP NAME?" (e.g., Calculator, Weather, Notes)
 Question 2: "Describe your app in detail - what should it DO? What features? What should the UI look like?"
 (Wait for my answer)
 
-*AI Instruction: Auto-generate the package name (format: com.example.[lowercaseappname]) based on the app name I provide. Do not ask me for the package name or any other details.*
+*AI Instruction: Auto-generate the package name (format: com.example.[lowercaseappnamewithoutspaces]) based on the app name I provide. Do not ask me for the package name or any other details.*
 
 Wait for my answers to BOTH questions before generating anything.
 
-AFTER I answer, generate the COMPLETE content for EXACTLY these 7 files. DO NOT generate, suggest, or create any extra files. All app logic, features, and UI must be implemented strictly within these files (use inner classes, single-activity architecture, etc., to keep it contained).
+AFTER I answer, generate the COMPLETE content for EXACTLY these 7 files. DO NOT generate, suggest, or create any extra files (no extra XML layouts, no extra Kotlin files, no image/mipmap assets). All app logic, features, and UI must be implemented strictly within these 7 files (use inner classes, programmatic UI generation for dynamic list items, and single-activity architecture to keep it contained).
 
-📁 CONFIG FILES (5 files - just replace names/values):
-1. settings.gradle → change rootProject.name
-2. app/build.gradle → change namespace and applicationId only
-3. app/src/main/AndroidManifest.xml → change theme name to match app
-4. app/src/main/res/values/strings.xml → change app_name
-5. app/src/main/res/values/themes.xml → change theme name to match app
+📁 CONFIG FILES (5 files):
+1. settings.gradle → Update `rootProject.name`. CRITICAL: Use `RepositoriesMode.PREFER_SETTINGS` (NOT `FAIL_ON_PROJECT_REPOS`) to prevent conflicts with any existing repository declarations in the root `build.gradle`.
+2. app/build.gradle → Change `namespace` and `applicationId` ONLY. Do not modify the `plugins` block or existing repository configurations.
+3. app/src/main/AndroidManifest.xml → Update theme name to match app. Add any strictly necessary permissions (e.g., READ_MEDIA_AUDIO). CRITICAL: Remove `android:icon` and `android:roundIcon` attributes from the `<application>` tag to prevent resource linking errors if the master template lacks default mipmap resources.
+4. app/src/main/res/values/strings.xml → Update `app_name` string.
+5. app/src/main/res/values/themes.xml → Update theme name to match app.
 
 📁 APP CODE FILES (2 files):
-6. app/src/main/java/[package-path]/MainActivity.kt → FULL working code based on my description (include all necessary logic, adapters, listeners, etc., inside this single file)
-7. app/src/main/res/layout/activity_main.xml → FULL layout based on my description
+6. app/src/main/java/[package-path]/MainActivity.kt → FULL working code based on my description. Include all necessary logic, adapters, listeners, and programmatic UI (if needed to avoid creating extra XML files) inside this single file.
+7. app/src/main/res/layout/activity_main.xml → FULL layout based on my description.
 
 OUTPUT FORMAT:
 - Give each file with its FULL PATH clearly labeled.
 - Make sure ALL package names match exactly.
-- Make MainActivity.kt contain REAL working code that implements my description.
-- Keep code simple, clean, and working.
-- Use Material Design components.
-- Use Kotlin.
-- Include proper imports.
+- Make MainActivity.kt contain REAL, compilable, working code that implements my description.
+- Keep code simple, clean, and working. Use Material Design components and Kotlin. Include proper imports.
 - STRICTLY DO NOT output any files outside the 7 listed above.
 
 At the end, give me a SHORT checklist of:
 - Which files to replace
 - Exact steps to deploy
 
-Keep everything minimal and working. Do not over-engineer.
-
-
+Keep everything minimal and working. Do not over-engineer. Ensure 0 build errors related to missing resources or repository conflicts.
