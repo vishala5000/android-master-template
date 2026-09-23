@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace 'com.master.template'
-    compileSdk 33
+    compileSdk 34  // 🔧 UPDATED TO 34
 
     defaultConfig {
         applicationId "com.master.template"
         minSdk 24
-        targetSdk 33
+        targetSdk 34  // 🔧 UPDATED TO 34
         versionCode 1
         versionName "1.0"
     }
