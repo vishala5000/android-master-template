@@ -102,11 +102,9 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "🎧 Wear headphones! Recording & playing music..."
         fabRecord.setImageResource(android.R.drawable.ic_media_pause)
 
-        // 1. Setup Microphone
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize)
         
-        // 2. Setup Speaker Playback
         val bufferSizePlayback = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
@@ -125,7 +123,6 @@ class MainActivity : AppCompatActivity() {
         audioRecord?.startRecording()
         audioTrack?.play()
 
-        // 3. Start Recording Thread
         recordingThread = Thread {
             while (isRecording) {
                 val read = audioRecord?.read(recordBuffer, 0, bufferSize) ?: -1
@@ -134,24 +131,20 @@ class MainActivity : AppCompatActivity() {
             voiceFos.close()
         }
         
-        // 4. Start Playback & Music Generation Thread
         playbackThread = Thread {
             var sampleIndex = 0
             val chunkSize = 1024
             val byteArray = ByteArray(chunkSize * 2)
             
             while (isRecording) {
-                // Generate music on the fly and write to byte array
                 for (i in 0 until chunkSize) {
                     val sample = generateSample(sampleIndex, sampleRate)
                     byteArray[i * 2] = (sample.toInt() and 0xff).toByte()
-                    byteArray[i * 2 + 1] = ((sample.toInt() >> 8) and 0xff).toByte()
+                    byteArray[i * 2 + 1] = ((sample.toInt() shr 8) and 0xff).toByte()
                     sampleIndex++
                 }
                 
-                // Save exact same music to file for final mixing
                 musicFos.write(byteArray)
-                // Play music through speakers
                 audioTrack?.write(byteArray, 0, byteArray.size)
             }
             musicFos.close()
@@ -220,8 +213,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- REAL-TIME AUDIO GENERATION ---
-
     private fun generateSample(i: Int, sr: Int): Short {
         val t = i.toDouble() / sr
         val bpm = 120.0
@@ -238,7 +229,6 @@ class MainActivity : AppCompatActivity() {
         )
         val chord = chords[chordIndex]
         
-        // 1. SYNTH PAD
         var padSample = 0.0
         for (freq in chord) {
             padSample += sin(2.0 * PI * freq * t) * 0.5
@@ -248,14 +238,12 @@ class MainActivity : AppCompatActivity() {
         val padEnv = min(1.0, t / 1.5) 
         padSample *= padEnv * 0.15 
 
-        // 2. BASSLINE
         var bassSample = 0.0
         val bassFreq = chord[0] / 2 
         val timeInBeat = currentBeat % 1.0
         val bassEnv = exp(-timeInBeat * 8.0) 
         bassSample = sin(2.0 * PI * bassFreq * t) * bassEnv * 0.4
 
-        // 3. DRUMS
         var drumSample = 0.0
         val beatFraction = currentBeat % 1.0
         
@@ -285,10 +273,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val sample = padSample + bassSample + drumSample
-        return (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        return (sample * Short.MAX_VALUE).toInt().coerceIn(-32768, 32767).toShort()
     }
-
-    // --- MIXING & MASTERING ---
 
     private fun normalizeAudio(audio: ShortArray, targetPeak: Float): ShortArray {
         var maxPeak = 0
@@ -301,7 +287,12 @@ class MainActivity : AppCompatActivity() {
         val gain = (Short.MAX_VALUE * targetPeak) / maxPeak
         val normalized = ShortArray(audio.size)
         for (i in audio.indices) {
-            normalized[i] = (audio[i].toInt() * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val clamped = (audio[i].toInt() * gain).toInt()
+            normalized[i] = when {
+                clamped > 32767 -> 32767.toShort()
+                clamped < -32768 -> (-32768).toShort()
+                else -> clamped.toShort()
+            }
         }
         return normalized
     }
@@ -314,12 +305,12 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until length) {
             val sum = voice[i].toInt() + music[i].toInt()
             val clipped = when {
-                sum > Short.MAX_VALUE -> Short.MAX_VALUE
-                sum < Short.MIN_VALUE -> Short.MIN_VALUE
-                else -> sum.toShort()
+                sum > 32767 -> 32767
+                sum < -32768 -> -32768
+                else -> sum
             }
             
-            var finalSample = clipped.toInt()
+            var finalSample = clipped
             if (i < fadeSamples) {
                 finalSample = (finalSample * (i.toDouble() / fadeSamples)).toInt()
             } else if (i > length - fadeSamples) {
@@ -360,13 +351,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun writeInt(buffer: ByteArray, offset: Int, value: Int) {
         buffer[offset] = (value and 0xff).toByte()
-        buffer[offset + 1] = ((value >> 8) and 0xff).toByte()
-        buffer[offset + 2] = ((value >> 16) and 0xff).toByte()
-        buffer[offset + 3] = ((value >> 24) and 0xff).toByte()
+        buffer[offset + 1] = ((value shr 8) and 0xff).toByte()
+        buffer[offset + 2] = ((value shr 16) and 0xff).toByte()
+        buffer[offset + 3] = ((value shr 24) and 0xff).toByte()
     }
 
     private fun writeShort(buffer: ByteArray, offset: Int, value: Short) {
         buffer[offset] = (value.toInt() and 0xff).toByte()
-        buffer[offset + 1] = ((value.toInt() >> 8) and 0xff).toByte()
+        buffer[offset + 1] = ((value.toInt() shr 8) and 0xff).toByte()
     }
 }
