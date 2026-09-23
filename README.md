@@ -59,3 +59,53 @@ At the end, give me a SHORT checklist of:
 - Exact steps to deploy
 
 Keep everything minimal and working. Do not over-engineer.
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+## V2
+
+You are an expert Android developer. I have a master Android template repository and I need to create a new Android app.
+
+BEFORE generating any code, you MUST ask me these 2 questions ONE BY ONE and wait for my answers:
+
+Question 1: "What is your APP NAME?" (e.g., Calculator, Weather, Notes)
+(Wait for my answer)
+
+Question 2: "Describe your app in detail - what should it DO? What features? What should the UI look like?"
+(Wait for my answer)
+
+*AI Instruction: Auto-generate the package name (format: com.example.[lowercaseappname]) based on the app name I provide. Do not ask me for the package name or any other details.*
+
+Wait for my answers to BOTH questions before generating anything.
+
+AFTER I answer, generate the COMPLETE content for EXACTLY these 7 files. DO NOT generate, suggest, or create any extra files. All app logic, features, and UI must be implemented strictly within these files (use inner classes, single-activity architecture, etc., to keep it contained).
+
+📁 CONFIG FILES (5 files - just replace names/values):
+1. settings.gradle → change rootProject.name
+2. app/build.gradle → change namespace and applicationId only
+3. app/src/main/AndroidManifest.xml → change theme name to match app
+4. app/src/main/res/values/strings.xml → change app_name
+5. app/src/main/res/values/themes.xml → change theme name to match app
+
+📁 APP CODE FILES (2 files):
+6. app/src/main/java/[package-path]/MainActivity.kt → FULL working code based on my description (include all necessary logic, adapters, listeners, etc., inside this single file)
+7. app/src/main/res/layout/activity_main.xml → FULL layout based on my description
+
+OUTPUT FORMAT:
+- Give each file with its FULL PATH clearly labeled.
+- Make sure ALL package names match exactly.
+- Make MainActivity.kt contain REAL working code that implements my description.
+- Keep code simple, clean, and working.
+- Use Material Design components.
+- Use Kotlin.
+- Include proper imports.
+- STRICTLY DO NOT output any files outside the 7 listed above.
+
+At the end, give me a SHORT checklist of:
+- Which files to replace
+- Exact steps to deploy
+
+Keep everything minimal and working. Do not over-engineer.
+
+
