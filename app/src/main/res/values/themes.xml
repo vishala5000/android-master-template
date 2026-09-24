@@ -1,11 +1,10 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Hardcoded colors used to prevent missing resource errors if colors.xml is absent -->
     <style name="Theme.SingSong" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
-        <item name="colorPrimary">#6200EE</item>
-        <item name="colorPrimaryVariant">#3700B3</item>
+        <item name="colorPrimary">#121212</item>
+        <item name="colorPrimaryVariant">#000000</item>
         <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#03DAC5</item>
-        <item name="colorSecondaryVariant">#018786</item>
+        <item name="colorSecondary">#BB86FC</item>
+        <item name="colorSecondaryVariant">#3700B3</item>
         <item name="colorOnSecondary">#000000</item>
     </style>
 </resources>
