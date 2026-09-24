@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace 'com.example.autorecorder'
+    namespace 'com.tutorial.recorder'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.autorecorder"
-        minSdk 24
+        applicationId "com.tutorial.recorder"
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
