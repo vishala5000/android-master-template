@@ -383,7 +383,10 @@ class RecordingService : Service() {
 
             val outputBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(outputBitmap)
-            val paint = Paint()
+            val paint = Paint().apply {
+                isFilterBitmap = true
+                isAntiAlias = true
+            }
 
             var gradientOffset = 0f
             val gradientIncrement = 0.01f
@@ -425,24 +428,27 @@ class RecordingService : Service() {
                             if (image != null) {
                                 val inputBitmap = imageToBitmap(image)
                                 
+                                // Draw animated gradient background
                                 drawGradientBackground(canvas, gradientOffset)
                                 gradientOffset += gradientIncrement
                                 if (gradientOffset > 1f) gradientOffset = 0f
 
-                                // Calculate scaling to fit phone screen in center of 1920x1080
+                                // Calculate perfect centering using minOf
                                 val scaleX = outputWidth.toFloat() / width.toFloat()
                                 val scaleY = outputHeight.toFloat() / height.toFloat()
-                                val scale = min(scaleX, scaleY)
+                                val scale = minOf(scaleX, scaleY)
 
                                 val scaledWidth = (width * scale).toInt()
                                 val scaledHeight = (height * scale).toInt()
 
-                                // Center the scaled content
+                                // Perfect center calculation
                                 val left = (outputWidth - scaledWidth) / 2
                                 val top = (outputHeight - scaledHeight) / 2
+                                val right = left + scaledWidth
+                                val bottom = top + scaledHeight
 
                                 val srcRect = Rect(0, 0, width, height)
-                                val dstRect = Rect(left, top, left + scaledWidth, top + scaledHeight)
+                                val dstRect = Rect(left, top, right, bottom)
 
                                 canvas.drawBitmap(inputBitmap, srcRect, dstRect, paint)
                                 inputBitmap.recycle()
