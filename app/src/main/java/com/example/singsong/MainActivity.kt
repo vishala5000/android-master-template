@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
@@ -42,6 +41,13 @@ class MainActivity : AppCompatActivity() {
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
 
+    // C Major Scale (2 octaves) for quantization
+    private val musicScale = floatArrayOf(
+        130.81f, 146.83f, 164.81f, 174.61f, 196.00f, 220.00f, 246.94f, // C3 to B3
+        261.63f, 293.66f, 329.63f, 349.23f, 392.00f, 440.00f, 493.88f, // C4 to B4
+        523.25f, 587.33f, 659.25f, 698.46f, 783.99f, 880.00f, 987.77f  // C5 to B5
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -67,7 +73,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startRecording() {
         isRecording = true
-        tvStatus.text = "Recording Studio Track... Sing now!"
+        tvStatus.text = "Recording... Sing your melody!"
         fabRecord.setImageResource(android.R.drawable.ic_media_pause)
         
         audioRecord = AudioRecord(
@@ -85,14 +91,14 @@ class MainActivity : AppCompatActivity() {
                     for (i in 0 until read) rawData.add(audioData[i])
                 }
             }
-            processStudioMix(rawData.toShortArray())
+            processDynamicMix(rawData.toShortArray())
         }
         recordingThread?.start()
     }
 
     private fun stopRecording() {
         isRecording = false
-        tvStatus.text = "Mixing & Mastering your song..."
+        tvStatus.text = "Analyzing melody & generating matching music..."
         fabRecord.setImageResource(android.R.drawable.ic_btn_speak_now)
         
         recordingThread?.join(3000)
@@ -101,20 +107,20 @@ class MainActivity : AppCompatActivity() {
         audioRecord = null
     }
 
-    private fun processStudioMix(rawData: ShortArray) {
+    private fun processDynamicMix(rawData: ShortArray) {
         if (rawData.isEmpty()) {
             runOnUiThread { tvStatus.text = "No audio recorded." }
             return
         }
 
-        // 1. Studio Vocal Chain (EQ, Compression, Reverb)
+        // 1. Apply Studio Vocal Chain (EQ, Compression, Reverb)
         val processedVocal = applyStudioVocalChain(rawData)
         
-        // 2. Detect Pitch for Key Matching
-        val detectedPitch = detectPitch(processedVocal)
+        // 2. Analyze melody in windows to auto-match music
+        val melodyMap = extractMelodyMap(processedVocal)
         
-        // 3. Generate Professional Backing Track (Chords + 808 Drums)
-        val backingTrack = generateStudioBackingTrack(detectedPitch, processedVocal.size, processedVocal)
+        // 3. Generate Backing Track that dynamically follows the melody
+        val backingTrack = generateDynamicBackingTrack(processedVocal.size, melodyMap)
         
         // 4. Final Mastering Mix
         val mixedData = masterMix(processedVocal, backingTrack)
@@ -123,7 +129,7 @@ class MainActivity : AppCompatActivity() {
         saveToWav(mixedData)
         
         runOnUiThread {
-            tvStatus.text = "Mastering complete! Ready to play."
+            tvStatus.text = "Mastering complete! Music matches your melody."
             btnPlay.isEnabled = true
         }
     }
@@ -137,11 +143,12 @@ class MainActivity : AppCompatActivity() {
         val hpCutoff = 0.98f
         for (i in result.indices) {
             val current = result[i]
-            result[i] = hpCutoff * (hpPrev + current - (if (i > 0) data[i-1].toFloat() / Short.MAX_VALUE else 0f))
+            val prevInput = if (i > 0) data[i-1].toFloat() / Short.MAX_VALUE else 0f
+            result[i] = hpCutoff * (hpPrev + current - prevInput)
             hpPrev = result[i]
         }
 
-        // 2. Soft-Knee Compressor (Even out vocal dynamics)
+        // 2. Soft-Knee Compressor
         val threshold = 0.3f
         val ratio = 4.0f
         for (i in result.indices) {
@@ -152,11 +159,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 3. Algorithmic Hall Reverb (Multi-tap delay with damping)
+        // 3. Algorithmic Hall Reverb
         val reverb = FloatArray(result.size)
-        val delay1 = sampleRate / 10 // 100ms
-        val delay2 = sampleRate / 15 // 66ms
-        val delay3 = sampleRate / 22 // 45ms
+        val delay1 = sampleRate / 10
+        val delay2 = sampleRate / 15
+        val delay3 = sampleRate / 22
         
         for (i in result.indices) {
             var sample = result[i]
@@ -169,63 +176,107 @@ class MainActivity : AppCompatActivity() {
         return ShortArray(reverb.size) { (reverb[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
-    // --- PITCH DETECTION (Autocorrelation) ---
-    private fun detectPitch(data: ShortArray): Float {
-        val chunkSize = 4096
-        if (data.size < chunkSize) return 261.63f // Default to Middle C
+    // --- MELODY EXTRACTION (Windowed Pitch Tracking) ---
+    private fun extractMelodyMap(data: ShortArray): Map<Int, Float> {
+        val melodyMap = mutableMapOf<Int, Float>()
+        val windowSize = 4096 // ~92ms windows
+        var currentPitch = 261.63f // Default to C4
         
-        val chunk = FloatArray(chunkSize)
-        for (i in 0 until chunkSize) chunk[i] = data[i].toFloat()
-        
-        val maxVal = chunk.maxOrNull()?.let { abs(it) } ?: 1f
-        if (maxVal < 100f) return 261.63f // Silence fallback
-        for (i in chunk.indices) chunk[i] /= maxVal
-        
-        var bestLag = 0
-        var maxCorrelation = 0f
-        val minLag = sampleRate / 1000 
-        val maxLag = sampleRate / 70   
-        
-        for (lag in minLag..maxLag) {
-            var correlation = 0f
-            for (i in 0 until chunkSize - lag) correlation += chunk[i] * chunk[i + lag]
-            if (correlation > maxCorrelation) {
-                maxCorrelation = correlation
-                bestLag = lag
+        for (i in 0 until data.size step windowSize) {
+            val end = minOf(i + windowSize, data.size)
+            if (end - i < windowSize) break
+            
+            val chunk = FloatArray(windowSize)
+            var energy = 0f
+            for (j in 0 until windowSize) {
+                chunk[j] = data[i + j].toFloat()
+                energy += abs(chunk[j])
             }
+            energy /= windowSize
+            
+            // Only detect pitch if there's actual singing (not silence)
+            if (energy > 500f) {
+                val maxVal = chunk.maxOrNull()?.let { abs(it) } ?: 1f
+                if (maxVal > 100f) {
+                    for (j in chunk.indices) chunk[j] /= maxVal
+                    
+                    var bestLag = 0
+                    var maxCorrelation = 0f
+                    val minLag = sampleRate / 1000 
+                    val maxLag = sampleRate / 70   
+                    
+                    for (lag in minLag..maxLag) {
+                        var correlation = 0f
+                        for (j in 0 until windowSize - lag) correlation += chunk[j] * chunk[j + lag]
+                        if (correlation > maxCorrelation) {
+                            maxCorrelation = correlation
+                            bestLag = lag
+                        }
+                    }
+                    
+                    if (bestLag > 0) {
+                        val detectedFreq = sampleRate.toFloat() / bestLag
+                        currentPitch = quantizeToScale(detectedFreq)
+                    }
+                }
+            }
+            melodyMap[i] = currentPitch
         }
-        return if (bestLag > 0) sampleRate.toFloat() / bestLag else 261.63f
+        return melodyMap
     }
 
-    // --- ADVANCED DSP: STUDIO BACKING TRACK ---
-    private fun generateStudioBackingTrack(rootPitch: Float, length: Int, vocalData: ShortArray): ShortArray {
-        val track = FloatArray(length)
-        
-        // Map pitch to musical scale (C Major / A Minor)
-        val notes = floatArrayOf(130.81f, 146.83f, 164.81f, 174.61f, 196.00f, 220.00f, 246.94f, 261.63f)
-        var rootNote = notes[0]
+    private fun quantizeToScale(freq: Float): Float {
+        var closest = musicScale[0]
         var minDiff = Float.MAX_VALUE
-        for (note in notes) {
-            if (abs(rootPitch - note) < minDiff) { minDiff = abs(rootPitch - note); rootNote = note }
+        for (note in musicScale) {
+            val diff = abs(freq - note)
+            if (diff < minDiff) {
+                minDiff = diff
+                closest = note
+            }
         }
+        return closest
+    }
 
-        // Chord Progression: I - vi - IV - V (Pop Standard)
-        val chordRoots = floatArrayOf(rootNote, rootNote * 5/6f, rootNote * 4/3f, rootNote * 3/2f)
-        val beatLength = sampleRate / 2 // 120 BPM
+    // --- DYNAMIC BACKING TRACK (Auto-Matches Melody) ---
+    private fun generateDynamicBackingTrack(length: Int, melodyMap: Map<Int, Float>): ShortArray {
+        val track = FloatArray(length)
+        val beatLength = sampleRate / 2 // 120 BPM (0.5s per beat)
         
+        // Chord mappings for C Major scale degrees (Root, 3rd, 5th)
+        val chordMap = mapOf(
+            130.81f to floatArrayOf(130.81f, 164.81f, 196.00f), // C Major
+            146.83f to floatArrayOf(146.83f, 196.00f, 220.00f), // D Minor
+            164.81f to floatArrayOf(164.81f, 196.00f, 246.94f), // E Minor
+            174.61f to floatArrayOf(174.61f, 220.00f, 261.63f), // F Major
+            196.00f to floatArrayOf(196.00f, 246.94f, 293.66f), // G Major
+            220.00f to floatArrayOf(220.00f, 261.63f, 329.63f), // A Minor
+            246.94f to floatArrayOf(246.94f, 293.66f, 349.23f)  // B Diminished (use G major bass instead for stability)
+        )
+
         for (i in 0 until length) {
             val t = i.toFloat() / sampleRate
             val beatIndex = (i / beatLength).toInt()
-            val chordRoot = chordRoots[beatIndex % 4]
+            val windowStart = beatIndex * beatLength * sampleRate.toInt()
             
-            // 1. Polyphonic Synth Pad (Major Chord: Root, 3rd, 5th)
+            // Get the quantized pitch for this beat
+            val currentPitch = melodyMap.entries.firstOrNull { it.key <= windowStart }?.value ?: 261.63f
+            
+            // Find the closest chord root in our map (simplified to C, D, E, F, G, A)
+            val chordRoot = chordMap.keys.minByOrNull { abs(it - currentPitch) } ?: 196.00f
+            val chord = chordMap[chordRoot] ?: floatArrayOf(196.00f, 246.94f, 293.66f)
+            
+            // 1. Dynamic Bassline (Follows the vocal melody root)
+            val bass = sin(2.0 * PI * chordRoot * t) * 0.5f
+            
+            // 2. Polyphonic Synth Pad (Plays the chord)
             val pad = (
-                sin(2.0 * PI * chordRoot * t) + 
-                sin(2.0 * PI * chordRoot * 1.25f * t) + 
-                sin(2.0 * PI * chordRoot * 1.5f * t)
-            ) / 3.0 * 0.25
+                sin(2.0 * PI * chord[0] * t) + 
+                sin(2.0 * PI * chord[1] * t) + 
+                sin(2.0 * PI * chord[2] * t)
+            ) / 3.0f * 0.2f
             
-            // 2. 808 Kick Drum (Pitch swept sine)
+            // 3. 808 Kick Drum (On beats 1 and 3)
             var kick = 0.0
             val timeInBeat = (i % beatLength).toFloat() / sampleRate
             if (timeInBeat < 0.15f && beatIndex % 2 == 0) {
@@ -233,7 +284,7 @@ class MainActivity : AppCompatActivity() {
                 kick = sin(2.0 * PI * kickFreq * timeInBeat) * exp(-timeInBeat * 15.0) * 0.6
             }
             
-            // 3. Crisp Snare (Noise + Tone)
+            // 4. Crisp Snare (On beats 2 and 4)
             var snare = 0.0
             val snareTime = (i % (beatLength / 2)).toFloat() / sampleRate
             if (snareTime < 0.1f && beatIndex % 2 == 1) {
@@ -242,29 +293,16 @@ class MainActivity : AppCompatActivity() {
                 snare = (noise * 0.6 + tone * 0.4) * exp(-snareTime * 25.0) * 0.4
             }
             
-            // 4. Hi-Hats (High-passed noise)
+            // 5. Hi-Hats (8th notes)
             var hihat = 0.0
             val hhTime = (i % (beatLength / 4)).toFloat() / sampleRate
             if (hhTime < 0.02f) {
-                hihat = (Math.random() * 2.0 - 1.0) * exp(-hhTime * 100.0) * 0.15
+                hihat = (Math.random() * 2.0 - 1.0) * exp(-hhTime * 100.0) * 0.15f
             }
             
-            track[i] = (pad + kick + snare + hihat).toFloat()
+            track[i] = (bass + pad + kick.toFloat() + snare.toFloat() + hihat.toFloat())
         }
         
-        // 5. Auto-Ducking (Sidechain effect based on vocal energy)
-        val windowSize = 2048
-        for (i in 0 until length step windowSize) {
-            var vocalEnergy = 0f
-            val end = minOf(i + windowSize, length)
-            for (j in i until end) vocalEnergy += abs(vocalData[j].toFloat())
-            vocalEnergy /= (end - i) * Short.MAX_VALUE
-            
-            // If singing loudly, duck the music
-            val duckFactor = if (vocalEnergy > 0.1f) 0.4f else 1.0f
-            for (j in i until end) track[j] *= duckFactor
-        }
-
         return ShortArray(track.size) { (track[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
@@ -290,7 +328,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveToWav(data: ShortArray) {
         val dir = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         if (dir != null) {
-            mixedFile = File(dir, "SingSong_Studio_${System.currentTimeMillis()}.wav")
+            mixedFile = File(dir, "SingSong_Matched_${System.currentTimeMillis()}.wav")
             try {
                 val fos = FileOutputStream(mixedFile)
                 val totalAudioLen = data.size * 2
