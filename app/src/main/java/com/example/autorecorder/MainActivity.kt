@@ -99,7 +99,6 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
-            // FIXED: Store resultCode and data in companion object so service can access them
             RecordingService.resultCode = resultCode
             RecordingService.resultData = data
             
@@ -110,7 +109,6 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
             
-            // FIXED: Do NOT call finish() - keep Activity alive for Android 14+ compatibility
             tvStatus.text = "Recording is active. Use the floating panel to control."
             btnStart.text = "Recording..."
             btnStart.isEnabled = false
@@ -121,11 +119,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Update UI if service is running
         if (RecordingService.isServiceRunning) {
             tvStatus.text = "Recording is active. Use the floating panel to control."
             btnStart.text = "Recording..."
             btnStart.isEnabled = false
+        } else {
+            tvStatus.text = "Ready to record"
+            btnStart.text = "Start Recording"
+            btnStart.isEnabled = true
         }
     }
 }
@@ -149,15 +150,13 @@ class RecordingService : Service() {
     private val outputWidth = 1920
     private val outputHeight = 1080
 
-    // FIXED: Static variables to hold MediaProjection data across Activity lifecycle
     companion object {
         private const val TAG = "RecordingService"
-        var resultCode: Int = -1
+        var resultCode: Int = Activity.RESULT_CANCELED // FIXED: Use RESULT_CANCELED (0) as default
         var resultData: Intent? = null
         var isServiceRunning: Boolean = false
     }
 
-    // FIXED: MediaProjection callback to handle permission revocation
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             Log.d(TAG, "MediaProjection stopped by user")
@@ -171,16 +170,19 @@ class RecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         isServiceRunning = true
         
-        // FIXED: Get data from static companion object instead of Intent extras
         val code = resultCode
         val data = resultData
 
         Log.d(TAG, "Starting service with resultCode: $code, data: ${data != null}")
 
-        if (code == -1 || data == null) {
+        // FIXED: Call startForeground IMMEDIATELY to satisfy Android's 5-second rule
+        startForegroundNotification()
+
+        // FIXED: Check for RESULT_OK, not -1 (since RESULT_OK IS -1)
+        if (code != Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Invalid resultCode or data")
-            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
-            stopSelf()
+            Toast.makeText(this, "Failed to start: Invalid permission data", Toast.LENGTH_SHORT).show()
+            stopForegroundService()
             return START_NOT_STICKY
         }
 
@@ -190,15 +192,13 @@ class RecordingService : Service() {
 
             if (mediaProjection == null) {
                 Log.e(TAG, "Failed to get MediaProjection")
-                Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
-                stopSelf()
+                Toast.makeText(this, "Failed to get MediaProjection", Toast.LENGTH_SHORT).show()
+                stopForegroundService()
                 return START_NOT_STICKY
             }
 
-            // FIXED: Register callback to handle permission revocation
             mediaProjection?.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
 
-            startForegroundNotification()
             createFloatingControlPanel()
             
             if (!startRecording()) {
@@ -405,10 +405,7 @@ class RecordingService : Service() {
     }
 
     private fun cleanupResources() {
-        try {
-            mediaRecorder?.stop()
-        } catch (e: Exception) { }
-        
+        try { mediaRecorder?.stop() } catch (e: Exception) { }
         try {
             mediaRecorder?.reset()
             mediaRecorder?.release()
@@ -458,9 +455,7 @@ class RecordingService : Service() {
                 }
             }
 
-            if (videoTrackIndex == -1) {
-                throw Exception("No video track found")
-            }
+            if (videoTrackIndex == -1) throw Exception("No video track found")
 
             extractor.selectTrack(videoTrackIndex)
             val videoFormat = extractor.getTrackFormat(videoTrackIndex)
@@ -468,9 +463,7 @@ class RecordingService : Service() {
             val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
             val frameRate = if (videoFormat.containsKey(MediaFormat.KEY_FRAME_RATE)) {
                 videoFormat.getInteger(MediaFormat.KEY_FRAME_RATE)
-            } else {
-                30
-            }
+            } else 30
 
             Log.d(TAG, "Processing video: ${width}x${height} at ${frameRate}fps")
 
@@ -537,7 +530,6 @@ class RecordingService : Service() {
 
                         if (doRender) {
                             val image = decoder.getOutputImage(decoderOutputBufferIndex)
-                            
                             if (image != null) {
                                 val inputBitmap = imageToBitmap(image)
                                 
@@ -598,7 +590,6 @@ class RecordingService : Service() {
                                     extractor.unselectTrack(audioTrackIndex)
                                     extractor.selectTrack(videoTrackIndex)
                                 }
-                                
                                 muxer.start()
                                 muxerStarted = true
                             }
@@ -616,14 +607,10 @@ class RecordingService : Service() {
                 }
             }
 
-            decoder.stop()
-            decoder.release()
-            encoder.stop()
-            encoder.release()
-            muxer.stop()
-            muxer.release()
+            decoder.stop(); decoder.release()
+            encoder.stop(); encoder.release()
+            muxer.stop(); muxer.release()
             extractor.release()
-
             outputBitmap.recycle()
 
             saveToMediaStore(finalFile)
@@ -656,36 +643,19 @@ class RecordingService : Service() {
             Bitmap.Config.ARGB_8888
         )
         bitmap.copyPixelsFromBuffer(buffer)
-
         return Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
     }
 
     private fun drawGradientBackground(canvas: Canvas, offset: Float) {
         val paint = Paint()
         val colors = intArrayOf(
-            Color.parseColor("#FF6B6B"),
-            Color.parseColor("#4ECDC4"),
-            Color.parseColor("#45B7D1"),
-            Color.parseColor("#96CEB4"),
-            Color.parseColor("#FFEAA7"),
-            Color.parseColor("#DDA0DD"),
-            Color.parseColor("#FF6B6B")
+            Color.parseColor("#FF6B6B"), Color.parseColor("#4ECDC4"), Color.parseColor("#45B7D1"),
+            Color.parseColor("#96CEB4"), Color.parseColor("#FFEAA7"), Color.parseColor("#DDA0DD"), Color.parseColor("#FF6B6B")
         )
-
-        val shader = LinearGradient(
-            0f,
-            0f,
-            outputWidth.toFloat(),
-            outputHeight.toFloat(),
-            colors,
-            null,
-            Shader.TileMode.MIRROR
-        )
-
+        val shader = LinearGradient(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat(), colors, null, Shader.TileMode.MIRROR)
         val matrix = Matrix()
         matrix.setRotate(offset * 360, outputWidth / 2f, outputHeight / 2f)
         shader.setLocalMatrix(matrix)
-
         paint.shader = shader
         canvas.drawRect(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat(), paint)
     }
@@ -697,16 +667,12 @@ class RecordingService : Service() {
             put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/AutoRecorder")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-
         val resolver = contentResolver
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-
         uri?.let {
             try {
                 resolver.openOutputStream(it)?.use { outputStream ->
-                    finalFile.inputStream().use { inputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
+                    finalFile.inputStream().use { inputStream -> inputStream.copyTo(outputStream) }
                 }
                 contentValues.clear()
                 contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
@@ -720,43 +686,28 @@ class RecordingService : Service() {
 
     private fun toggleDrawing() {
         isDrawing = !isDrawing
-        if (isDrawing) {
-            createDrawingOverlay()
-        } else {
-            removeDrawingOverlay()
-        }
+        if (isDrawing) createDrawingOverlay() else removeDrawingOverlay()
     }
 
     private fun createDrawingOverlay() {
         val layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or 
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
-
         drawingOverlay = DrawingOverlayView(this)
         windowManager?.addView(drawingOverlay, layoutParams)
     }
 
     private fun removeDrawingOverlay() {
-        drawingOverlay?.let {
-            windowManager?.removeView(it)
-            drawingOverlay = null
-        }
+        drawingOverlay?.let { windowManager?.removeView(it); drawingOverlay = null }
     }
 
     private fun stopForegroundService() {
         isServiceRunning = false
         removeDrawingOverlay()
-        floatingView?.let {
-            windowManager?.removeView(it)
-            floatingView = null
-        }
+        floatingView?.let { windowManager?.removeView(it); floatingView = null }
         stopForeground(true)
         stopSelf()
     }
@@ -772,52 +723,26 @@ class RecordingService : Service() {
         private var currentPath: Path? = null
         private var currentPaint: Paint? = null
 
-        init {
-            setLayerType(LAYER_TYPE_SOFTWARE, null)
-        }
+        init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            for ((path, paint) in paths) {
-                canvas.drawPath(path, paint)
-            }
-            currentPath?.let { path ->
-                currentPaint?.let { paint ->
-                    canvas.drawPath(path, paint)
-                }
-            }
+            for ((path, paint) in paths) canvas.drawPath(path, paint)
+            currentPath?.let { path -> currentPaint?.let { paint -> canvas.drawPath(path, paint) } }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     currentPath = Path()
-                    currentPaint = Paint().apply {
-                        color = Color.RED
-                        style = Paint.Style.STROKE
-                        strokeWidth = 8f
-                        isAntiAlias = true
-                        strokeJoin = Paint.Join.ROUND
-                        strokeCap = Paint.Cap.ROUND
-                    }
+                    currentPaint = Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 8f; isAntiAlias = true; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND }
                     currentPath?.moveTo(event.x, event.y)
                     return true
                 }
-                MotionEvent.ACTION_MOVE -> {
-                    currentPath?.lineTo(event.x, event.y)
-                    invalidate()
-                    return true
-                }
+                MotionEvent.ACTION_MOVE -> { currentPath?.lineTo(event.x, event.y); invalidate(); return true }
                 MotionEvent.ACTION_UP -> {
-                    currentPath?.let { path ->
-                        currentPaint?.let { paint ->
-                            paths.add(Pair(path, paint))
-                        }
-                    }
-                    currentPath = null
-                    currentPaint = null
-                    invalidate()
-                    return true
+                    currentPath?.let { path -> currentPaint?.let { paint -> paths.add(Pair(path, paint)) } }
+                    currentPath = null; currentPaint = null; invalidate(); return true
                 }
             }
             return super.onTouchEvent(event)
