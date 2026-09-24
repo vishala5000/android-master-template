@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var btnStart: MaterialButton
     private lateinit var chkAutoZoom: CheckBox
+    private lateinit var tvStatus: TextView
 
     private val PERMISSION_REQUEST_CODE = 100
     private val SCREEN_CAPTURE_REQUEST_CODE = 101
@@ -50,6 +51,7 @@ class MainActivity : AppCompatActivity() {
 
         btnStart = findViewById(R.id.btnStart)
         chkAutoZoom = findViewById(R.id.chkAutoZoom)
+        tvStatus = findViewById(R.id.tvStatus)
 
         createNotificationChannel()
         checkPermissions()
@@ -97,19 +99,33 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
-            // FIXED: Properly pass the Intent data to the service
-            val serviceIntent = Intent(this, RecordingService::class.java)
-            serviceIntent.putExtra("resultCode", resultCode)
-            serviceIntent.putExtra("data", data)
+            // FIXED: Store resultCode and data in companion object so service can access them
+            RecordingService.resultCode = resultCode
+            RecordingService.resultData = data
             
+            val serviceIntent = Intent(this, RecordingService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
             } else {
                 startService(serviceIntent)
             }
-            finish()
+            
+            // FIXED: Do NOT call finish() - keep Activity alive for Android 14+ compatibility
+            tvStatus.text = "Recording is active. Use the floating panel to control."
+            btnStart.text = "Recording..."
+            btnStart.isEnabled = false
         } else {
             Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Update UI if service is running
+        if (RecordingService.isServiceRunning) {
+            tvStatus.text = "Recording is active. Use the floating panel to control."
+            btnStart.text = "Recording..."
+            btnStart.isEnabled = false
         }
     }
 }
@@ -133,46 +149,66 @@ class RecordingService : Service() {
     private val outputWidth = 1920
     private val outputHeight = 1080
 
+    // FIXED: Static variables to hold MediaProjection data across Activity lifecycle
     companion object {
         private const val TAG = "RecordingService"
+        var resultCode: Int = -1
+        var resultData: Intent? = null
+        var isServiceRunning: Boolean = false
+    }
+
+    // FIXED: MediaProjection callback to handle permission revocation
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.d(TAG, "MediaProjection stopped by user")
+            cleanupResources()
+            stopForegroundService()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // FIXED: More robust extraction of Intent extras
-        val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
-        val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra("data", Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra("data")
-        }
-
-        Log.d(TAG, "Received resultCode: $resultCode, data: ${data != null}")
-
-        if (resultCode == -1 || data == null) {
-            Log.e(TAG, "Invalid resultCode or data")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-
-        if (mediaProjection == null) {
-            Log.e(TAG, "Failed to get MediaProjection")
-            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        startForegroundNotification()
-        createFloatingControlPanel()
+        isServiceRunning = true
         
-        if (!startRecording()) {
-            Log.e(TAG, "Failed to start recording")
+        // FIXED: Get data from static companion object instead of Intent extras
+        val code = resultCode
+        val data = resultData
+
+        Log.d(TAG, "Starting service with resultCode: $code, data: ${data != null}")
+
+        if (code == -1 || data == null) {
+            Log.e(TAG, "Invalid resultCode or data")
             Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        try {
+            val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mediaProjectionManager.getMediaProjection(code, data)
+
+            if (mediaProjection == null) {
+                Log.e(TAG, "Failed to get MediaProjection")
+                Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            // FIXED: Register callback to handle permission revocation
+            mediaProjection?.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+
+            startForegroundNotification()
+            createFloatingControlPanel()
+            
+            if (!startRecording()) {
+                Log.e(TAG, "Failed to start recording")
+                Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+                stopForegroundService()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onStartCommand: ${e.message}", e)
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
             stopForegroundService()
         }
 
@@ -185,6 +221,7 @@ class RecordingService : Service() {
             .setContentText("Recording in progress...")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -263,11 +300,9 @@ class RecordingService : Service() {
             var screenWidth = displayMetrics.widthPixels
             var screenHeight = displayMetrics.heightPixels
 
-            // Ensure even dimensions (required by video encoders)
             if (screenWidth % 2 != 0) screenWidth--
             if (screenHeight % 2 != 0) screenHeight--
 
-            // Validate dimensions are within supported range
             if (screenWidth < 480 || screenHeight < 480) {
                 Log.e(TAG, "Screen dimensions too small: ${screenWidth}x${screenHeight}")
                 return false
@@ -372,22 +407,21 @@ class RecordingService : Service() {
     private fun cleanupResources() {
         try {
             mediaRecorder?.stop()
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (e: Exception) { }
         
         try {
             mediaRecorder?.reset()
             mediaRecorder?.release()
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (e: Exception) { }
         mediaRecorder = null
 
         virtualDisplay?.release()
         virtualDisplay = null
 
-        mediaProjection?.stop()
+        try {
+            mediaProjection?.unregisterCallback(projectionCallback)
+            mediaProjection?.stop()
+        } catch (e: Exception) { }
         mediaProjection = null
         
         isRecording = false
@@ -717,6 +751,7 @@ class RecordingService : Service() {
     }
 
     private fun stopForegroundService() {
+        isServiceRunning = false
         removeDrawingOverlay()
         floatingView?.let {
             windowManager?.removeView(it)
@@ -729,7 +764,7 @@ class RecordingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         cleanupResources()
-        stopForegroundService()
+        isServiceRunning = false
     }
 
     inner class DrawingOverlayView(context: Context) : View(context) {
