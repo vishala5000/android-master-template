@@ -96,11 +96,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-            val serviceIntent = Intent(this, RecordingService::class.java).apply {
-                putExtra("resultCode", resultCode)
-                putExtra("data", data)
-            }
+        if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
+            // FIXED: Properly pass the Intent data to the service
+            val serviceIntent = Intent(this, RecordingService::class.java)
+            serviceIntent.putExtra("resultCode", resultCode)
+            serviceIntent.putExtra("data", data)
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
             } else {
@@ -139,8 +140,16 @@ class RecordingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // FIXED: More robust extraction of Intent extras
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
-        val data = intent?.getParcelableExtra<Intent>("data")
+        val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent?.getParcelableExtra("data", Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra("data")
+        }
+
+        Log.d(TAG, "Received resultCode: $resultCode, data: ${data != null}")
 
         if (resultCode == -1 || data == null) {
             Log.e(TAG, "Invalid resultCode or data")
