@@ -11,7 +11,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
-import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
@@ -23,7 +22,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.*
@@ -40,8 +38,7 @@ class MainActivity : AppCompatActivity() {
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     
-    // Changed from File? to Uri? for modern MediaStore compatibility
-    private var mixedFileUri: Uri? = null
+    private var mixedFileUri: android.net.Uri? = null
     private var mediaPlayer: MediaPlayer? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
@@ -324,7 +321,6 @@ class MainActivity : AppCompatActivity() {
         return ShortArray(length) { (mixed[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
-    // UPDATED: Uses MediaStore to save directly to the public Music/SingSong folder
     private fun saveToWav(data: ShortArray) {
         val fileName = "SingSong_Mastered_${System.currentTimeMillis()}.wav"
         val contentValues = ContentValues().apply {
@@ -382,9 +378,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // UPDATED: Plays directly from the MediaStore Uri
+    // FIXED: Assigned to local 'val' to prevent smart-cast errors
     private fun playMixedTrack() {
-        if (mixedFileUri == null) return
+        val currentUri = mixedFileUri ?: return
 
         mediaPlayer?.release()
         
@@ -403,7 +399,7 @@ class MainActivity : AppCompatActivity() {
                 audioManager?.abandonAudioFocusRequest(audioFocusRequest!!)
             }
             try {
-                setDataSource(this@MainActivity, mixedFileUri)
+                setDataSource(this@MainActivity, currentUri)
                 prepare()
                 start()
             } catch (e: Exception) {
