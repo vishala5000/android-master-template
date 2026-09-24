@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AutoRecorder"
+rootProject.name = "V Tutorial Recorder"
 include ':app'
