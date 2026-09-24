@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.singsong'
+    namespace 'com.example.autorecorder'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.singsong"
+        applicationId "com.example.autorecorder"
         minSdk 24
         targetSdk 34
         versionCode 1
