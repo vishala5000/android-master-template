@@ -21,7 +21,7 @@
         android:id="@+id/tvDescription"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Record your screen in HD 1920x1080 with a floating control panel. Draw on screen and enable auto-zoom for dynamic presentations."
+        android:text="Record your screen in HD 1920x1080. The phone screen will be perfectly centered with animated gradient background on left and right sides."
         android:textSize="16sp"
         android:gravity="center"
         android:layout_marginTop="24dp"
