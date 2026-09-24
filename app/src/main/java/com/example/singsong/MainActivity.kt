@@ -22,10 +22,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.sin
-import kotlin.random.Random
+import kotlin.math.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -70,7 +67,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startRecording() {
         isRecording = true
-        tvStatus.text = "Recording... Sing now!"
+        tvStatus.text = "Recording Studio Track... Sing now!"
         fabRecord.setImageResource(android.R.drawable.ic_media_pause)
         
         audioRecord = AudioRecord(
@@ -88,71 +85,100 @@ class MainActivity : AppCompatActivity() {
                     for (i in 0 until read) rawData.add(audioData[i])
                 }
             }
-            processAndMixAudio(rawData.toShortArray())
+            processStudioMix(rawData.toShortArray())
         }
         recordingThread?.start()
     }
 
     private fun stopRecording() {
         isRecording = false
-        tvStatus.text = "Processing your song... Adding magic!"
+        tvStatus.text = "Mixing & Mastering your song..."
         fabRecord.setImageResource(android.R.drawable.ic_btn_speak_now)
         
-        recordingThread?.join(2000)
+        recordingThread?.join(3000)
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
     }
 
-    private fun processAndMixAudio(rawData: ShortArray) {
+    private fun processStudioMix(rawData: ShortArray) {
         if (rawData.isEmpty()) {
             runOnUiThread { tvStatus.text = "No audio recorded." }
             return
         }
 
-        // 1. Apply Echo Effect
-        val echoedData = applyEcho(rawData)
+        // 1. Studio Vocal Chain (EQ, Compression, Reverb)
+        val processedVocal = applyStudioVocalChain(rawData)
         
-        // 2. Detect Pitch to generate matching music
-        val detectedPitch = detectPitch(echoedData)
+        // 2. Detect Pitch for Key Matching
+        val detectedPitch = detectPitch(processedVocal)
         
-        // 3. Generate Backing Track matching the pitch
-        val backingTrack = generateBackingTrack(detectedPitch, echoedData.size)
+        // 3. Generate Professional Backing Track (Chords + 808 Drums)
+        val backingTrack = generateStudioBackingTrack(detectedPitch, processedVocal.size, processedVocal)
         
-        // 4. Mix Voice and Backing Track
-        val mixedData = mixAudio(echoedData, backingTrack)
+        // 4. Final Mastering Mix
+        val mixedData = masterMix(processedVocal, backingTrack)
         
-        // 5. Save to WAV
+        // 5. Export High-Quality WAV
         saveToWav(mixedData)
         
         runOnUiThread {
-            tvStatus.text = "Done! Your song is ready."
+            tvStatus.text = "Mastering complete! Ready to play."
             btnPlay.isEnabled = true
         }
     }
 
-    private fun applyEcho(data: ShortArray): ShortArray {
-        val delaySamples = sampleRate / 4 // 0.25s delay
-        val decay = 0.5f
-        val result = ShortArray(data.size)
+    // --- ADVANCED DSP: STUDIO VOCAL CHAIN ---
+    private fun applyStudioVocalChain(data: ShortArray): ShortArray {
+        val result = FloatArray(data.size) { data[it].toFloat() / Short.MAX_VALUE }
         
-        for (i in data.indices) {
-            var sample = data[i].toFloat()
-            if (i >= delaySamples) sample += result[i - delaySamples].toFloat() * decay
-            result[i] = sample.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        // 1. High-Pass Filter (Remove low-end rumble)
+        var hpPrev = 0f
+        val hpCutoff = 0.98f
+        for (i in result.indices) {
+            val current = result[i]
+            result[i] = hpCutoff * (hpPrev + current - (if (i > 0) data[i-1].toFloat() / Short.MAX_VALUE else 0f))
+            hpPrev = result[i]
         }
-        return result
+
+        // 2. Soft-Knee Compressor (Even out vocal dynamics)
+        val threshold = 0.3f
+        val ratio = 4.0f
+        for (i in result.indices) {
+            val absVal = abs(result[i])
+            if (absVal > threshold) {
+                val sign = if (result[i] >= 0) 1f else -1f
+                result[i] = sign * (threshold + (absVal - threshold) / ratio)
+            }
+        }
+
+        // 3. Algorithmic Hall Reverb (Multi-tap delay with damping)
+        val reverb = FloatArray(result.size)
+        val delay1 = sampleRate / 10 // 100ms
+        val delay2 = sampleRate / 15 // 66ms
+        val delay3 = sampleRate / 22 // 45ms
+        
+        for (i in result.indices) {
+            var sample = result[i]
+            if (i >= delay1) sample += reverb[i - delay1] * 0.3f
+            if (i >= delay2) sample += reverb[i - delay2] * 0.2f
+            if (i >= delay3) sample += reverb[i - delay3] * 0.15f
+            reverb[i] = sample.coerceIn(-1f, 1f)
+        }
+
+        return ShortArray(reverb.size) { (reverb[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
+    // --- PITCH DETECTION (Autocorrelation) ---
     private fun detectPitch(data: ShortArray): Float {
         val chunkSize = 4096
-        if (data.size < chunkSize) return 220.0f 
+        if (data.size < chunkSize) return 261.63f // Default to Middle C
         
         val chunk = FloatArray(chunkSize)
         for (i in 0 until chunkSize) chunk[i] = data[i].toFloat()
         
-        val maxVal = chunk.maxOrNull() ?: 1f
-        if (maxVal == 0f) return 220.0f
+        val maxVal = chunk.maxOrNull()?.let { abs(it) } ?: 1f
+        if (maxVal < 100f) return 261.63f // Silence fallback
         for (i in chunk.indices) chunk[i] /= maxVal
         
         var bestLag = 0
@@ -168,59 +194,103 @@ class MainActivity : AppCompatActivity() {
                 bestLag = lag
             }
         }
-        return if (bestLag > 0) sampleRate.toFloat() / bestLag else 220.0f
+        return if (bestLag > 0) sampleRate.toFloat() / bestLag else 261.63f
     }
 
-    private fun generateBackingTrack(pitch: Float, length: Int): ShortArray {
-        val track = ShortArray(length)
-        val notes = floatArrayOf(130.81f, 146.83f, 155.56f, 174.61f, 196.00f, 207.65f, 233.08f, 261.63f)
+    // --- ADVANCED DSP: STUDIO BACKING TRACK ---
+    private fun generateStudioBackingTrack(rootPitch: Float, length: Int, vocalData: ShortArray): ShortArray {
+        val track = FloatArray(length)
         
-        var closestNote = notes[0]
+        // Map pitch to musical scale (C Major / A Minor)
+        val notes = floatArrayOf(130.81f, 146.83f, 164.81f, 174.61f, 196.00f, 220.00f, 246.94f, 261.63f)
+        var rootNote = notes[0]
         var minDiff = Float.MAX_VALUE
         for (note in notes) {
-            val diff = abs(pitch - note)
-            if (diff < minDiff) { minDiff = diff; closestNote = note }
+            if (abs(rootPitch - note) < minDiff) { minDiff = abs(rootPitch - note); rootNote = note }
         }
-        
-        val bassFreq = closestNote / 2 
-        
-        for (i in track.indices) {
-            val t = i.toFloat() / sampleRate
-            val bass = sin(2.0 * PI * bassFreq * t) * 0.4
-            
-            var kick = 0.0
-            val timeInBeat = t % 0.5f
-            if (timeInBeat < 0.1f) {
-                val kickFreq = 150.0 - (timeInBeat / 0.1f) * 100.0
-                kick = sin(2.0 * PI * kickFreq * timeInBeat) * (1.0 - timeInBeat / 0.1f) * 0.6
-            }
-            
-            var hihat = 0.0
-            val timeInHihat = t % 0.25f
-            if (timeInHihat < 0.05f) {
-                hihat = (Random.nextDouble() * 2.0 - 1.0) * (1.0 - timeInHihat / 0.05f) * 0.2
-            }
-            
-            val sample = (bass + kick + hihat) * Short.MAX_VALUE
-            track[i] = sample.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-        }
-        return track
-    }
 
-    private fun mixAudio(voice: ShortArray, music: ShortArray): ShortArray {
-        val length = minOf(voice.size, music.size)
-        val mixed = ShortArray(length)
+        // Chord Progression: I - vi - IV - V (Pop Standard)
+        val chordRoots = floatArrayOf(rootNote, rootNote * 5/6f, rootNote * 4/3f, rootNote * 3/2f)
+        val beatLength = sampleRate / 2 // 120 BPM
+        
         for (i in 0 until length) {
-            val sum = voice[i].toFloat() * 0.8f + music[i].toFloat() * 0.6f
-            mixed[i] = sum.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val t = i.toFloat() / sampleRate
+            val beatIndex = (i / beatLength).toInt()
+            val chordRoot = chordRoots[beatIndex % 4]
+            
+            // 1. Polyphonic Synth Pad (Major Chord: Root, 3rd, 5th)
+            val pad = (
+                sin(2.0 * PI * chordRoot * t) + 
+                sin(2.0 * PI * chordRoot * 1.25f * t) + 
+                sin(2.0 * PI * chordRoot * 1.5f * t)
+            ) / 3.0 * 0.25
+            
+            // 2. 808 Kick Drum (Pitch swept sine)
+            var kick = 0.0
+            val timeInBeat = (i % beatLength).toFloat() / sampleRate
+            if (timeInBeat < 0.15f && beatIndex % 2 == 0) {
+                val kickFreq = 150.0 * exp(-timeInBeat * 30.0) + 40.0
+                kick = sin(2.0 * PI * kickFreq * timeInBeat) * exp(-timeInBeat * 15.0) * 0.6
+            }
+            
+            // 3. Crisp Snare (Noise + Tone)
+            var snare = 0.0
+            val snareTime = (i % (beatLength / 2)).toFloat() / sampleRate
+            if (snareTime < 0.1f && beatIndex % 2 == 1) {
+                val noise = (Math.random() * 2.0 - 1.0)
+                val tone = sin(2.0 * PI * 200.0 * snareTime)
+                snare = (noise * 0.6 + tone * 0.4) * exp(-snareTime * 25.0) * 0.4
+            }
+            
+            // 4. Hi-Hats (High-passed noise)
+            var hihat = 0.0
+            val hhTime = (i % (beatLength / 4)).toFloat() / sampleRate
+            if (hhTime < 0.02f) {
+                hihat = (Math.random() * 2.0 - 1.0) * exp(-hhTime * 100.0) * 0.15
+            }
+            
+            track[i] = (pad + kick + snare + hihat).toFloat()
         }
-        return mixed
+        
+        // 5. Auto-Ducking (Sidechain effect based on vocal energy)
+        val windowSize = 2048
+        for (i in 0 until length step windowSize) {
+            var vocalEnergy = 0f
+            val end = minOf(i + windowSize, length)
+            for (j in i until end) vocalEnergy += abs(vocalData[j].toFloat())
+            vocalEnergy /= (end - i) * Short.MAX_VALUE
+            
+            // If singing loudly, duck the music
+            val duckFactor = if (vocalEnergy > 0.1f) 0.4f else 1.0f
+            for (j in i until end) track[j] *= duckFactor
+        }
+
+        return ShortArray(track.size) { (track[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
+    // --- FINAL MASTERING MIX ---
+    private fun masterMix(voice: ShortArray, music: ShortArray): ShortArray {
+        val length = minOf(voice.size, music.size)
+        val mixed = FloatArray(length)
+        
+        for (i in 0 until length) {
+            // Professional mix balance: Vocals upfront, music supporting
+            mixed[i] = (voice[i].toFloat() * 0.85f + music[i].toFloat() * 0.65f)
+            
+            // Soft Clipper (Prevents digital distortion)
+            if (abs(mixed[i]) > 0.9f) {
+                mixed[i] = (mixed[i] - 0.9f * (mixed[i] / abs(mixed[i]))) / (1.0 + (abs(mixed[i]) - 0.9f)) + 0.9f * (mixed[i] / abs(mixed[i]))
+            }
+        }
+        
+        return ShortArray(length) { (mixed[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
+    }
+
+    // --- WAV EXPORT ---
     private fun saveToWav(data: ShortArray) {
         val dir = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         if (dir != null) {
-            mixedFile = File(dir, "SingSong_Mixed_${System.currentTimeMillis()}.wav")
+            mixedFile = File(dir, "SingSong_Studio_${System.currentTimeMillis()}.wav")
             try {
                 val fos = FileOutputStream(mixedFile)
                 val totalAudioLen = data.size * 2
