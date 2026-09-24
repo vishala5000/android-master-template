@@ -33,7 +33,7 @@ import androidx.core.app.NotificationCompat
 import com.google.android.material.button.MaterialButton
 import java.io.File
 import java.io.IOException
-import kotlin.math.sin
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
 
@@ -126,8 +126,9 @@ class RecordingService : Service() {
     private var tempFile: File? = null
     private var outputFile: String? = null
 
-    private val outputWidth = 1080
-    private val outputHeight = 1920
+    // Fixed output video dimensions (landscape 16:9)
+    private val outputWidth = 1920
+    private val outputHeight = 1080
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -305,7 +306,6 @@ class RecordingService : Service() {
 
             Toast.makeText(this, "Processing video with gradient background...", Toast.LENGTH_LONG).show()
 
-            // Process video in background thread
             Thread {
                 processVideoWithGradient()
             }.start()
@@ -327,11 +327,10 @@ class RecordingService : Service() {
         }
 
         val timestamp = System.currentTimeMillis()
-        outputFile = "AutoRecorder_1080x1920_$timestamp.mp4"
+        outputFile = "AutoRecorder_1920x1080_$timestamp.mp4"
         val finalFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), outputFile)
 
         try {
-            // Extract frames from recorded video
             val extractor = MediaExtractor()
             extractor.setDataSource(tempFile!!.absolutePath)
 
@@ -362,12 +361,10 @@ class RecordingService : Service() {
                 30
             }
 
-            // Setup MediaCodec decoder
             val decoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
             decoder.configure(videoFormat, null, null, 0)
             decoder.start()
 
-            // Setup MediaCodec encoder for output
             val outputFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outputWidth, outputHeight)
             outputFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             outputFormat.setInteger(MediaFormat.KEY_BIT_RATE, 8000000)
@@ -379,13 +376,11 @@ class RecordingService : Service() {
             val encoderSurface = encoder.createInputSurface()
             encoder.start()
 
-            // Setup MediaMuxer
             val muxer = MediaMuxer(finalFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             var muxerVideoTrackIndex = -1
             var muxerAudioTrackIndex = -1
             var muxerStarted = false
 
-            // Canvas for compositing
             val outputBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(outputBitmap)
             val paint = Paint()
@@ -393,7 +388,6 @@ class RecordingService : Service() {
             var gradientOffset = 0f
             val gradientIncrement = 0.01f
 
-            // Processing loop
             val bufferInfo = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
@@ -426,26 +420,24 @@ class RecordingService : Service() {
                         decoder.releaseOutputBuffer(decoderOutputBufferIndex, doRender)
 
                         if (doRender) {
-                            val outputBuffer = decoder.getOutputBuffer(decoderOutputBufferIndex)
                             val image = decoder.getOutputImage(decoderOutputBufferIndex)
                             
                             if (image != null) {
-                                // Convert Image to Bitmap
                                 val inputBitmap = imageToBitmap(image)
                                 
-                                // Draw gradient background
                                 drawGradientBackground(canvas, gradientOffset)
                                 gradientOffset += gradientIncrement
                                 if (gradientOffset > 1f) gradientOffset = 0f
 
-                                // Calculate scaling to fit screen in center
+                                // Calculate scaling to fit phone screen in center of 1920x1080
                                 val scaleX = outputWidth.toFloat() / width.toFloat()
                                 val scaleY = outputHeight.toFloat() / height.toFloat()
-                                val scale = minOf(scaleX, scaleY)
+                                val scale = min(scaleX, scaleY)
 
                                 val scaledWidth = (width * scale).toInt()
                                 val scaledHeight = (height * scale).toInt()
 
+                                // Center the scaled content
                                 val left = (outputWidth - scaledWidth) / 2
                                 val top = (outputHeight - scaledHeight) / 2
 
@@ -456,7 +448,6 @@ class RecordingService : Service() {
                                 inputBitmap.recycle()
                                 image.close()
 
-                                // Draw to encoder surface
                                 val encoderCanvas = Canvas(encoderSurface)
                                 encoderCanvas.drawBitmap(outputBitmap, 0f, 0f, null)
                             }
@@ -516,12 +507,11 @@ class RecordingService : Service() {
 
             outputBitmap.recycle()
 
-            // Save to MediaStore
             saveToMediaStore(finalFile)
             tempFile?.delete()
 
             Handler(Looper.getMainLooper()).post {
-                Toast.makeText(this, "Video saved with gradient background (1080x1920)", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Video saved with gradient background (1920x1080)", Toast.LENGTH_LONG).show()
                 stopForegroundService()
             }
 
