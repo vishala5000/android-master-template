@@ -25,6 +25,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import android.view.*
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -106,6 +107,8 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
             finish()
+        } else {
+            Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -126,9 +129,12 @@ class RecordingService : Service() {
     private var tempFile: File? = null
     private var outputFile: String? = null
 
-    // Fixed output video dimensions (landscape 16:9)
     private val outputWidth = 1920
     private val outputHeight = 1080
+
+    companion object {
+        private const val TAG = "RecordingService"
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -137,6 +143,7 @@ class RecordingService : Service() {
         val data = intent?.getParcelableExtra<Intent>("data")
 
         if (resultCode == -1 || data == null) {
+            Log.e(TAG, "Invalid resultCode or data")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -144,9 +151,21 @@ class RecordingService : Service() {
         val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
 
+        if (mediaProjection == null) {
+            Log.e(TAG, "Failed to get MediaProjection")
+            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         startForegroundNotification()
         createFloatingControlPanel()
-        startRecording()
+        
+        if (!startRecording()) {
+            Log.e(TAG, "Failed to start recording")
+            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+            stopForegroundService()
+        }
 
         return START_STICKY
     }
@@ -218,56 +237,87 @@ class RecordingService : Service() {
         }
     }
 
-    private fun startRecording() {
-        val timestamp = System.currentTimeMillis()
-        val tempFileName = "AutoRecorder_temp_$timestamp.mp4"
-        tempFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), tempFileName)
+    private fun startRecording(): Boolean {
+        return try {
+            val timestamp = System.currentTimeMillis()
+            val tempFileName = "AutoRecorder_temp_$timestamp.mp4"
+            tempFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), tempFileName)
 
-        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(this)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
+            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+
+            val displayMetrics = resources.displayMetrics
+            var screenWidth = displayMetrics.widthPixels
+            var screenHeight = displayMetrics.heightPixels
+
+            // Ensure even dimensions (required by video encoders)
+            if (screenWidth % 2 != 0) screenWidth--
+            if (screenHeight % 2 != 0) screenHeight--
+
+            // Validate dimensions are within supported range
+            if (screenWidth < 480 || screenHeight < 480) {
+                Log.e(TAG, "Screen dimensions too small: ${screenWidth}x${screenHeight}")
+                return false
+            }
+
+            Log.d(TAG, "Starting recording with dimensions: ${screenWidth}x${screenHeight}")
+
+            mediaRecorder?.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setVideoSize(screenWidth, screenHeight)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setVideoEncodingBitRate(8000000)
+                setVideoFrameRate(30)
+                setOutputFile(tempFile?.absolutePath)
+                prepare()
+            }
+
+            val surface = mediaRecorder?.surface
+            if (surface == null) {
+                Log.e(TAG, "MediaRecorder surface is null")
+                return false
+            }
+
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "ScreenRecorder",
+                screenWidth,
+                screenHeight,
+                320,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                surface,
+                null,
+                null
+            )
+
+            if (virtualDisplay == null) {
+                Log.e(TAG, "Failed to create VirtualDisplay")
+                return false
+            }
+
+            mediaRecorder?.start()
+            isRecording = true
+            Log.d(TAG, "Recording started successfully")
+            Toast.makeText(this, "Recording started", Toast.LENGTH_SHORT).show()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting recording: ${e.message}", e)
+            cleanupResources()
+            false
         }
-
-        val displayMetrics = resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val screenHeight = displayMetrics.heightPixels
-
-        mediaRecorder?.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setVideoSize(screenWidth, screenHeight)
-            setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setVideoEncodingBitRate(8000000)
-            setVideoFrameRate(30)
-            setOutputFile(tempFile?.absolutePath)
-            prepare()
-        }
-
-        val surface = mediaRecorder?.surface ?: return
-
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ScreenRecorder",
-            screenWidth,
-            screenHeight,
-            320,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface,
-            null,
-            null
-        )
-
-        mediaRecorder?.start()
-        isRecording = true
-        Toast.makeText(this, "Recording started", Toast.LENGTH_SHORT).show()
     }
 
     private fun toggleRecording() {
         if (!isRecording) {
-            startRecording()
+            if (!startRecording()) {
+                Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+            }
         } else {
             stopRecordingAndProcess()
         }
@@ -294,15 +344,7 @@ class RecordingService : Service() {
 
         try {
             mediaRecorder?.stop()
-            mediaRecorder?.reset()
-            mediaRecorder?.release()
-            mediaRecorder = null
-
-            virtualDisplay?.release()
-            virtualDisplay = null
-
-            mediaProjection?.stop()
-            mediaProjection = null
+            cleanupResources()
 
             Toast.makeText(this, "Processing video with gradient background...", Toast.LENGTH_LONG).show()
 
@@ -311,10 +353,36 @@ class RecordingService : Service() {
             }.start()
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Error stopping recording: ${e.message}", e)
             Toast.makeText(this, "Error stopping recording", Toast.LENGTH_SHORT).show()
+            cleanupResources()
             stopForegroundService()
         }
+    }
+
+    private fun cleanupResources() {
+        try {
+            mediaRecorder?.stop()
+        } catch (e: Exception) {
+            // Ignore
+        }
+        
+        try {
+            mediaRecorder?.reset()
+            mediaRecorder?.release()
+        } catch (e: Exception) {
+            // Ignore
+        }
+        mediaRecorder = null
+
+        virtualDisplay?.release()
+        virtualDisplay = null
+
+        mediaProjection?.stop()
+        mediaProjection = null
+        
+        isRecording = false
+        isPaused = false
     }
 
     private fun processVideoWithGradient() {
@@ -360,6 +428,8 @@ class RecordingService : Service() {
             } else {
                 30
             }
+
+            Log.d(TAG, "Processing video: ${width}x${height} at ${frameRate}fps")
 
             val decoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
             decoder.configure(videoFormat, null, null, 0)
@@ -428,12 +498,10 @@ class RecordingService : Service() {
                             if (image != null) {
                                 val inputBitmap = imageToBitmap(image)
                                 
-                                // Draw animated gradient background
                                 drawGradientBackground(canvas, gradientOffset)
                                 gradientOffset += gradientIncrement
                                 if (gradientOffset > 1f) gradientOffset = 0f
 
-                                // Calculate perfect centering using minOf
                                 val scaleX = outputWidth.toFloat() / width.toFloat()
                                 val scaleY = outputHeight.toFloat() / height.toFloat()
                                 val scale = minOf(scaleX, scaleY)
@@ -441,7 +509,6 @@ class RecordingService : Service() {
                                 val scaledWidth = (width * scale).toInt()
                                 val scaledHeight = (height * scale).toInt()
 
-                                // Perfect center calculation
                                 val left = (outputWidth - scaledWidth) / 2
                                 val top = (outputHeight - scaledHeight) / 2
                                 val right = left + scaledWidth
@@ -454,7 +521,6 @@ class RecordingService : Service() {
                                 inputBitmap.recycle()
                                 image.close()
 
-                                // FIXED: Use lockCanvas to draw on Surface
                                 val surfaceCanvas = encoderSurface.lockCanvas(null)
                                 if (surfaceCanvas != null) {
                                     surfaceCanvas.drawBitmap(outputBitmap, 0f, 0f, null)
@@ -526,7 +592,7 @@ class RecordingService : Service() {
             }
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Error processing video: ${e.message}", e)
             Handler(Looper.getMainLooper()).post {
                 Toast.makeText(this, "Error processing video: ${e.message}", Toast.LENGTH_LONG).show()
                 stopForegroundService()
@@ -603,7 +669,7 @@ class RecordingService : Service() {
                 contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
                 resolver.update(it, contentValues, null, null)
             } catch (e: IOException) {
-                e.printStackTrace()
+                Log.e(TAG, "Error saving to MediaStore: ${e.message}", e)
                 resolver.delete(it, null, null)
             }
         }
@@ -653,6 +719,7 @@ class RecordingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cleanupResources()
         stopForegroundService()
     }
 
