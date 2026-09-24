@@ -83,7 +83,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE || bufferSize == AudioRecord.ERROR_NEGATIVE) {
+        // FIXED: Removed non-existent ERROR_NEGATIVE, using <= 0 check
+        if (bufferSize <= 0 || bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
             Toast.makeText(this, "Audio hardware not supported on this device", Toast.LENGTH_LONG).show()
             return
         }
@@ -257,54 +258,55 @@ class MainActivity : AppCompatActivity() {
         return closest
     }
 
+    // FIXED: All math now uses Double consistently, with explicit .toFloat() cast at the end
     private fun generateDynamicBackingTrack(length: Int, melodyMap: Map<Int, Float>): ShortArray {
         val track = FloatArray(length)
         val beatLength = sampleRate / 2
         
         val chordMap = mapOf(
-            130.81f to floatArrayOf(130.81f, 164.81f, 196.00f),
-            146.83f to floatArrayOf(146.83f, 196.00f, 220.00f),
-            164.81f to floatArrayOf(164.81f, 196.00f, 246.94f),
-            174.61f to floatArrayOf(174.61f, 220.00f, 261.63f),
-            196.00f to floatArrayOf(196.00f, 246.94f, 293.66f),
-            220.00f to floatArrayOf(220.00f, 261.63f, 329.63f),
-            246.94f to floatArrayOf(246.94f, 293.66f, 349.23f)
+            130.81f to doubleArrayOf(130.81, 164.81, 196.00),
+            146.83f to doubleArrayOf(146.83, 196.00, 220.00),
+            164.81f to doubleArrayOf(164.81, 196.00, 246.94),
+            174.61f to doubleArrayOf(174.61, 220.00, 261.63),
+            196.00f to doubleArrayOf(196.00, 246.94, 293.66),
+            220.00f to doubleArrayOf(220.00, 261.63, 329.63),
+            246.94f to doubleArrayOf(246.94, 293.66, 349.23)
         )
 
         for (i in 0 until length) {
-            val t = i.toFloat() / sampleRate
-            val beatIndex = (i / beatLength).toInt()
-            val windowStart = beatIndex * beatLength * sampleRate.toInt()
+            val t = i.toDouble() / sampleRate
+            val beatIndex = i / beatLength
+            val windowStart = beatIndex * beatLength * sampleRate
             
             val currentPitch = melodyMap.entries.firstOrNull { it.key <= windowStart }?.value ?: 261.63f
             val chordRoot = chordMap.keys.minByOrNull { abs(it - currentPitch) } ?: 196.00f
-            val chord = chordMap[chordRoot] ?: floatArrayOf(196.00f, 246.94f, 293.66f)
+            val chord = chordMap[chordRoot] ?: doubleArrayOf(196.00, 246.94, 293.66)
             
-            val bass = sin(2.0 * PI * chordRoot * t) * 0.5f
-            val pad = (sin(2.0 * PI * chord[0] * t) + sin(2.0 * PI * chord[1] * t) + sin(2.0 * PI * chord[2] * t)) / 3.0f * 0.2f
+            val bass = sin(2.0 * PI * chordRoot * t) * 0.5
+            val pad = (sin(2.0 * PI * chord[0] * t) + sin(2.0 * PI * chord[1] * t) + sin(2.0 * PI * chord[2] * t)) / 3.0 * 0.2
             
             var kick = 0.0
-            val timeInBeat = (i % beatLength).toFloat() / sampleRate
-            if (timeInBeat < 0.15f && beatIndex % 2 == 0) {
+            val timeInBeat = (i % beatLength).toDouble() / sampleRate
+            if (timeInBeat < 0.15 && beatIndex % 2 == 0) {
                 val kickFreq = 150.0 * exp(-timeInBeat * 30.0) + 40.0
                 kick = sin(2.0 * PI * kickFreq * timeInBeat) * exp(-timeInBeat * 15.0) * 0.6
             }
             
             var snare = 0.0
-            val snareTime = (i % (beatLength / 2)).toFloat() / sampleRate
-            if (snareTime < 0.1f && beatIndex % 2 == 1) {
+            val snareTime = (i % (beatLength / 2)).toDouble() / sampleRate
+            if (snareTime < 0.1 && beatIndex % 2 == 1) {
                 val noise = (Math.random() * 2.0 - 1.0)
                 val tone = sin(2.0 * PI * 200.0 * snareTime)
                 snare = (noise * 0.6 + tone * 0.4) * exp(-snareTime * 25.0) * 0.4
             }
             
             var hihat = 0.0
-            val hhTime = (i % (beatLength / 4)).toFloat() / sampleRate
-            if (hhTime < 0.02f) {
-                hihat = (Math.random() * 2.0 - 1.0) * exp(-hhTime * 100.0) * 0.15f
+            val hhTime = (i % (beatLength / 4)).toDouble() / sampleRate
+            if (hhTime < 0.02) {
+                hihat = (Math.random() * 2.0 - 1.0) * exp(-hhTime * 100.0) * 0.15
             }
             
-            track[i] = (bass + pad + kick.toFloat() + snare.toFloat() + hihat.toFloat())
+            track[i] = (bass + pad + kick + snare + hihat).toFloat()
         }
         
         return ShortArray(track.size) { (track[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
@@ -317,7 +319,7 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until length) {
             mixed[i] = (voice[i].toFloat() * 0.85f + music[i].toFloat() * 0.65f)
             if (abs(mixed[i]) > 0.9f) {
-                mixed[i] = (mixed[i] - 0.9f * (mixed[i] / abs(mixed[i]))) / (1.0 + (abs(mixed[i]) - 0.9f)) + 0.9f * (mixed[i] / abs(mixed[i]))
+                mixed[i] = (mixed[i] - 0.9f * (mixed[i] / abs(mixed[i]))) / (1.0f + (abs(mixed[i]) - 0.9f)) + 0.9f * (mixed[i] / abs(mixed[i]))
             }
         }
         return ShortArray(length) { (mixed[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
