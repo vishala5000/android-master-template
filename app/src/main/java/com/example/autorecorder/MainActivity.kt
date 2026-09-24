@@ -454,8 +454,12 @@ class RecordingService : Service() {
                                 inputBitmap.recycle()
                                 image.close()
 
-                                val encoderCanvas = Canvas(encoderSurface)
-                                encoderCanvas.drawBitmap(outputBitmap, 0f, 0f, null)
+                                // FIXED: Use lockCanvas to draw on Surface
+                                val surfaceCanvas = encoderSurface.lockCanvas(null)
+                                if (surfaceCanvas != null) {
+                                    surfaceCanvas.drawBitmap(outputBitmap, 0f, 0f, null)
+                                    encoderSurface.unlockCanvasAndPost(surfaceCanvas)
+                                }
                             }
                         }
 
