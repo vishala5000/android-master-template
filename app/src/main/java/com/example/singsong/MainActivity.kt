@@ -1,6 +1,7 @@
 package com.example.singsong
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -13,6 +14,7 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.view.View
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -21,8 +23,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -40,7 +40,8 @@ class MainActivity : AppCompatActivity() {
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     
-    private var mixedFile: File? = null
+    // Changed from File? to Uri? for modern MediaStore compatibility
+    private var mixedFileUri: Uri? = null
     private var mediaPlayer: MediaPlayer? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
@@ -83,7 +84,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        // FIXED: Removed non-existent ERROR_NEGATIVE, using <= 0 check
         if (bufferSize <= 0 || bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
             Toast.makeText(this, "Audio hardware not supported on this device", Toast.LENGTH_LONG).show()
             return
@@ -152,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         saveToWav(mixedData)
         
         runOnUiThread {
-            tvStatus.text = "Mastering complete! Music matches your melody."
+            tvStatus.text = "Mastering complete! Saved to Music folder."
             progressBar.visibility = View.GONE
             fabRecord.isEnabled = true
             fabRecord.setImageResource(android.R.drawable.ic_btn_speak_now)
@@ -258,7 +258,6 @@ class MainActivity : AppCompatActivity() {
         return closest
     }
 
-    // FIXED: All math now uses Double consistently, with explicit .toFloat() cast at the end
     private fun generateDynamicBackingTrack(length: Int, melodyMap: Map<Int, Float>): ShortArray {
         val track = FloatArray(length)
         val beatLength = sampleRate / 2
@@ -325,49 +324,67 @@ class MainActivity : AppCompatActivity() {
         return ShortArray(length) { (mixed[it] * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
+    // UPDATED: Uses MediaStore to save directly to the public Music/SingSong folder
     private fun saveToWav(data: ShortArray) {
-        val dir = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
-        if (dir != null) {
-            mixedFile = File(dir, "SingSong_Mastered_${System.currentTimeMillis()}.wav")
+        val fileName = "SingSong_Mastered_${System.currentTimeMillis()}.wav"
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
+            put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/SingSong")
+            put(MediaStore.Audio.Media.IS_PENDING, 1)
+        }
+
+        val resolver = contentResolver
+        val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, contentValues)
+
+        if (uri != null) {
             try {
-                val fos = FileOutputStream(mixedFile)
-                val totalAudioLen = data.size * 2
-                val totalDataLen = totalAudioLen + 36
-                val byteRate = 16 * sampleRate * 1 / 8
-                
-                val header = ByteArray(44).apply {
-                    this[0] = 'R'.toByte(); this[1] = 'I'.toByte(); this[2] = 'F'.toByte(); this[3] = 'F'.toByte()
-                    this[4] = (totalDataLen and 0xff).toByte(); this[5] = ((totalDataLen shr 8) and 0xff).toByte()
-                    this[6] = ((totalDataLen shr 16) and 0xff).toByte(); this[7] = ((totalDataLen shr 24) and 0xff).toByte()
-                    this[8] = 'W'.toByte(); this[9] = 'A'.toByte(); this[10] = 'V'.toByte(); this[11] = 'E'.toByte()
-                    this[12] = 'f'.toByte(); this[13] = 'm'.toByte(); this[14] = 't'.toByte(); this[15] = ' '.toByte()
-                    this[16] = 16; this[17] = 0; this[18] = 0; this[19] = 0 
-                    this[20] = 1; this[21] = 0 
-                    this[22] = 1; this[23] = 0 
-                    this[24] = (sampleRate and 0xff).toByte(); this[25] = ((sampleRate shr 8) and 0xff).toByte()
-                    this[26] = ((sampleRate shr 16) and 0xff).toByte(); this[27] = ((sampleRate shr 24) and 0xff).toByte()
-                    this[28] = (byteRate and 0xff).toByte(); this[29] = ((byteRate shr 8) and 0xff).toByte()
-                    this[30] = ((byteRate shr 16) and 0xff).toByte(); this[31] = ((byteRate shr 24) and 0xff).toByte()
-                    this[32] = 2; this[33] = 0 
-                    this[34] = 16; this[35] = 0 
-                    this[40] = (totalAudioLen and 0xff).toByte(); this[41] = ((totalAudioLen shr 8) and 0xff).toByte()
-                    this[42] = ((totalAudioLen shr 16) and 0xff).toByte(); this[43] = ((totalAudioLen shr 24) and 0xff).toByte()
+                resolver.openOutputStream(uri)?.use { outputStream ->
+                    val totalAudioLen = data.size * 2
+                    val totalDataLen = totalAudioLen + 36
+                    val byteRate = 16 * sampleRate * 1 / 8
+                    
+                    val header = ByteArray(44).apply {
+                        this[0] = 'R'.toByte(); this[1] = 'I'.toByte(); this[2] = 'F'.toByte(); this[3] = 'F'.toByte()
+                        this[4] = (totalDataLen and 0xff).toByte(); this[5] = ((totalDataLen shr 8) and 0xff).toByte()
+                        this[6] = ((totalDataLen shr 16) and 0xff).toByte(); this[7] = ((totalDataLen shr 24) and 0xff).toByte()
+                        this[8] = 'W'.toByte(); this[9] = 'A'.toByte(); this[10] = 'V'.toByte(); this[11] = 'E'.toByte()
+                        this[12] = 'f'.toByte(); this[13] = 'm'.toByte(); this[14] = 't'.toByte(); this[15] = ' '.toByte()
+                        this[16] = 16; this[17] = 0; this[18] = 0; this[19] = 0 
+                        this[20] = 1; this[21] = 0 
+                        this[22] = 1; this[23] = 0 
+                        this[24] = (sampleRate and 0xff).toByte(); this[25] = ((sampleRate shr 8) and 0xff).toByte()
+                        this[26] = ((sampleRate shr 16) and 0xff).toByte(); this[27] = ((sampleRate shr 24) and 0xff).toByte()
+                        this[28] = (byteRate and 0xff).toByte(); this[29] = ((byteRate shr 8) and 0xff).toByte()
+                        this[30] = ((byteRate shr 16) and 0xff).toByte(); this[31] = ((byteRate shr 24) and 0xff).toByte()
+                        this[32] = 2; this[33] = 0 
+                        this[34] = 16; this[35] = 0 
+                        this[40] = (totalAudioLen and 0xff).toByte(); this[41] = ((totalAudioLen shr 8) and 0xff).toByte()
+                        this[42] = ((totalAudioLen shr 16) and 0xff).toByte(); this[43] = ((totalAudioLen shr 24) and 0xff).toByte()
+                    }
+                    
+                    outputStream.write(header)
+                    val buffer = ByteBuffer.allocate(data.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+                    for (sample in data) buffer.putShort(sample)
+                    outputStream.write(buffer.array())
                 }
+                // Mark as fully written
+                contentValues.clear()
+                contentValues.put(MediaStore.Audio.Media.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
                 
-                fos.write(header)
-                val buffer = ByteBuffer.allocate(data.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-                for (sample in data) buffer.putShort(sample)
-                fos.write(buffer.array())
-                fos.close()
-            } catch (e: IOException) {
+                mixedFileUri = uri
+            } catch (e: Exception) {
                 e.printStackTrace()
+                resolver.delete(uri, null, null)
                 runOnUiThread { Toast.makeText(this, "Error saving file", Toast.LENGTH_SHORT).show() }
             }
         }
     }
 
+    // UPDATED: Plays directly from the MediaStore Uri
     private fun playMixedTrack() {
-        if (mixedFile == null || !mixedFile!!.exists()) return
+        if (mixedFileUri == null) return
 
         mediaPlayer?.release()
         
@@ -386,7 +403,7 @@ class MainActivity : AppCompatActivity() {
                 audioManager?.abandonAudioFocusRequest(audioFocusRequest!!)
             }
             try {
-                setDataSource(this@MainActivity, Uri.fromFile(mixedFile))
+                setDataSource(this@MainActivity, mixedFileUri)
                 prepare()
                 start()
             } catch (e: Exception) {
