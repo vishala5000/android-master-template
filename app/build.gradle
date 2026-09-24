@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.shortsvatiation'
+    namespace 'com.example.singsong'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.shortsvatiation"
+        applicationId "com.example.singsong"
         minSdk 24
         targetSdk 34
         versionCode 1
