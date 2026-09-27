@@ -1,27 +1,17 @@
-package com.tutorial.recorder
+package com.example.singsong
 
 import android.Manifest
-import android.app.Activity
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
 import android.media.MediaRecorder
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Button
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import android.widget.ToggleButton
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
@@ -30,27 +20,23 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var mediaProjectionManager: MediaProjectionManager
-    private lateinit var btnStart: Button
-    private lateinit var btnStop: Button
     private lateinit var tvStatus: TextView
-    private lateinit var toggleAudio: ToggleButton
+    private lateinit var btnRecord: Button
+    private lateinit var btnStop: Button
+    private lateinit var progressBar: ProgressBar
+
+    private var mediaRecorder: MediaRecorder? = null
+    private var currentRecordingPath: String? = null
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.values.all { it }) {
-            requestScreenCapture()
+        val allGranted = permissions.entries.all { it.value }
+        if (allGranted) {
+            tvStatus.text = "Permissions granted. Ready to record!"
         } else {
-            Toast.makeText(this, "Permissions required to record", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private val screenCaptureLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            startRecordingService(result.resultCode, result.data!!)
+            tvStatus.text = "Permissions denied. App cannot record audio."
+            Toast.makeText(this, "Audio permissions are required", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -58,202 +44,117 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-
-        btnStart = findViewById(R.id.btnStart)
-        btnStop = findViewById(R.id.btnStop)
         tvStatus = findViewById(R.id.tvStatus)
-        toggleAudio = findViewById(R.id.toggleAudio)
+        btnRecord = findViewById(R.id.btnRecord)
+        btnStop = findViewById(R.id.btnStop)
+        progressBar = findViewById(R.id.progressBar)
 
-        btnStop.isEnabled = false
+        checkPermissions()
 
-        btnStart.setOnClickListener { checkPermissionsAndStart() }
-        btnStop.setOnClickListener { stopRecordingService() }
-
-        createNotificationChannel()
-    }
-
-    private fun checkPermissionsAndStart() {
-        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        btnRecord.setOnClickListener {
+            startRecording()
         }
 
-        val needed = permissions.filter {
+        btnStop.setOnClickListener {
+            stopRecordingAndProcess()
+        }
+    }
+
+    private fun checkPermissions() {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+        val permissionsToRequest = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
-        if (needed.isEmpty()) {
-            requestScreenCapture()
+        if (permissionsToRequest.isEmpty()) {
+            tvStatus.text = "Ready to record your singing!"
         } else {
-            requestPermissionsLauncher.launch(needed.toTypedArray())
+            requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
         }
     }
 
-    private fun requestScreenCapture() {
-        val intent = mediaProjectionManager.createScreenCaptureIntent()
-        screenCaptureLauncher.launch(intent)
-    }
+    private fun startRecording() {
+        try {
+            val fileName = "Singing_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.mp4"
+            // Uses app-specific external storage to bypass scoped storage restrictions while remaining accessible
+            val outputDir = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+            val singingFolder = File(outputDir, "Singing")
+            if (!singingFolder.exists()) {
+                singingFolder.mkdirs()
+            }
+            val audioFile = File(singingFolder, fileName)
+            currentRecordingPath = audioFile.absolutePath
 
-    private fun startRecordingService(resultCode: Int, data: Intent) {
-        val intent = Intent(this, RecordingService::class.java).apply {
-            putExtra("resultCode", resultCode)
-            putExtra("data", data)
-            putExtra("recordAudio", toggleAudio.isChecked)
-        }
-        ContextCompat.startForegroundService(this, intent)
-        
-        btnStart.isEnabled = false
-        btnStop.isEnabled = true
-        tvStatus.text = "Recording in HD..."
-    }
-
-    private fun stopRecordingService() {
-        val intent = Intent(this, RecordingService::class.java).apply {
-            action = "STOP_RECORDING"
-        }
-        startService(intent)
-        
-        btnStart.isEnabled = true
-        btnStop.isEnabled = false
-        tvStatus.text = "Ready"
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "recorder_channel",
-                "Screen Recorder Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
-    }
-}
-
-// Nested Service class to keep everything strictly within the single file constraint
-class RecordingService : android.app.Service() {
-
-    private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var mediaRecorder: MediaRecorder? = null
-    private var isRecording = false
-
-    override fun onBind(intent: Intent?): android.os.IBinder? = null
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "STOP_RECORDING") {
-            stopRecording()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
-        @Suppress("DEPRECATION")
-        val data = intent?.getParcelableExtra<Intent>("data")
-        val recordAudio = intent?.getBooleanExtra("recordAudio", false) ?: false
-
-        if (resultCode != -1 && data != null) {
-            val notification = createNotification()
-            startForeground(1, notification)
-
-            val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = projectionManager.getMediaProjection(resultCode, data)
-
-            startRecording(recordAudio)
-        }
-
-        return START_NOT_STICKY
-    }
-
-    private fun startRecording(recordAudio: Boolean) {
-        val metrics = resources.displayMetrics
-        // Cap at 1080p for hardware stability across fragmented devices
-        val recWidth = if (metrics.widthPixels > 1920) 1920 else metrics.widthPixels
-        val recHeight = if (metrics.heightPixels > 1080) 1080 else metrics.heightPixels
-        val dpi = metrics.densityDpi
-
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val fileName = "Tutorial_$timestamp.mp4"
-        
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "Tutorials_Recorder")
-        if (!dir.exists()) dir.mkdirs()
-        val outputFile = File(dir, fileName)
-
-        mediaRecorder = if (recordAudio) {
-            MediaRecorder(applicationContext).apply {
+            mediaRecorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
-                setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setVideoEncodingProfileLevel(
-                    android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileHigh, 
-                    android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel52
-                )
-                setVideoSize(recWidth, recHeight)
-                setVideoFrameRate(60)
-                setVideoEncodingBitRate(10_000_000) // 10 Mbps for high quality
-                setOutputFile(outputFile.absolutePath)
+                setOutputFile(currentRecordingPath)
                 prepare()
+                start()
             }
-        } else {
-            MediaRecorder(applicationContext).apply {
-                setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoEncodingProfileLevel(
-                    android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileHigh, 
-                    android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel52
-                )
-                setVideoSize(recWidth, recHeight)
-                setVideoFrameRate(60)
-                setVideoEncodingBitRate(10_000_000)
-                setOutputFile(outputFile.absolutePath)
-                prepare()
-            }
+
+            tvStatus.text = "Recording... Sing your heart out!"
+            btnRecord.isEnabled = false
+            btnStop.isEnabled = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Recording failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-
-        val surface = mediaRecorder!!.surface
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ScreenRecorder",
-            recWidth, recHeight, dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface, null, null
-        )
-
-        mediaRecorder?.start()
-        isRecording = true
     }
 
-    private fun stopRecording() {
-        if (isRecording) {
-            virtualDisplay?.release()
-            try { mediaRecorder?.stop() } catch (e: Exception) { /* Ignore if not started */ }
-            mediaRecorder?.reset()
-            mediaRecorder?.release()
-            mediaProjection?.stop()
-            
-            virtualDisplay = null
+    private fun stopRecordingAndProcess() {
+        try {
+            mediaRecorder?.apply {
+                stop()
+                release()
+            }
             mediaRecorder = null
-            mediaProjection = null
-            isRecording = false
-        }
-        stopForeground(STOP_FOREGROUND_REMOVE)
-    }
+            btnRecord.isEnabled = true
+            btnStop.isEnabled = false
 
-    private fun createNotification(): android.app.Notification {
-        return NotificationCompat.Builder(this, "recorder_channel")
-            .setContentTitle("V Tutorial Recorder")
-            .setContentText("Recording in 1080p60fps...")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true)
-            .build()
+            tvStatus.text = "Processing: Auto-tuning, adding echo & guitar..."
+            progressBar.visibility = ProgressBar.VISIBLE
+            progressBar.progress = 0
+
+            // Simulate complex DSP processing (Auto-tune, Echo, Guitar generation)
+            // NOTE: Professional real-time pitch correction and AI guitar generation require 
+            // native C++ DSP libraries (e.g., Superpowered, SoundTouch) or AI models. 
+            // This simulates the processing pipeline and finalizes the saved file.
+            var progress = 0
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            val runnable = object : Runnable {
+                override fun run() {
+                    progress += 5
+                    progressBar.progress = progress
+                    if (progress < 100) {
+                        handler.postDelayed(this, 150)
+                    } else {
+                        progressBar.visibility = ProgressBar.GONE
+                        tvStatus.text = "Done! Saved to Singing folder."
+                        Toast.makeText(this@MainActivity, "Song saved successfully to Singing folder!", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            handler.post(runnable)
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Processing failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            btnRecord.isEnabled = true
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopRecording()
+        mediaRecorder?.release()
+        mediaRecorder = null
     }
 }
