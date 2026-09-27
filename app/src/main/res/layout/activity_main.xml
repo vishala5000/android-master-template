@@ -1,54 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="24dp">
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center_horizontal"
+    android:background="?android:attr/windowBackground">
 
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Ready to record your singing!"
-        android:textSize="18sp"
+        android:textSize="20sp"
         android:textStyle="bold"
         android:textAlignment="center"
-        app:layout_constraintBottom_toTopOf="@+id/btnRecord"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_chainStyle="packed" />
+        android:textColor="?android:attr/textColorPrimary"
+        android:layout_marginTop="48dp"
+        android:padding="16dp" />
 
     <Button
         android:id="@+id/btnRecord"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
-        android:text="Start Recording"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/tvStatus" />
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:layout_marginTop="48dp"
+        android:text="🎤 Start Recording"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:backgroundTint="@color/design_default_color_primary"
+        android:textColor="@android:color/white" />
 
     <Button
         android:id="@+id/btnStop"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
         android:layout_marginTop="16dp"
-        android:text="Stop &amp; Process (Auto-Tune + Guitar)"
+        android:text="⏹ Stop &amp; Process"
+        android:textSize="16sp"
+        android:textStyle="bold"
         android:enabled="false"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnRecord" />
+        android:backgroundTint="@color/design_default_color_secondary"
+        android:textColor="@android:color/white" />
 
     <ProgressBar
         android:id="@+id/progressBar"
         style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="32dp"
         android:visibility="gone"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnStop" />
+        android:indeterminate="false"
+        android:max="100" />
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+</LinearLayout>
