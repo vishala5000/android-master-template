@@ -137,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = "Processing: Professional Studio Mix..."
+        tvStatus.text = "Processing: Echo + Guitar Music..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -155,15 +155,22 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 20 }
-                val processedVocal = applyProfessionalVocalProcessing(pcmData)
+                
+                // 1. Apply professional echo to vocals
+                val processedVocal = applyStudioEcho(pcmData)
                 
                 runOnUiThread { progressBar.progress = 50 }
-                val backingTrack = generateProfessionalGuitarTrack(pcmData, 44100)
+                
+                // 2. Generate guitar music that FOLLOWS the singing pitch
+                val guitarTrack = generateGuitarFollowingVoice(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 75 }
-                val finalMix = mixTracksProfessional(processedVocal, backingTrack)
+                
+                // 3. Mix vocal + guitar together
+                val finalMix = mixVocalAndGuitar(processedVocal, guitarTrack)
                 
                 runOnUiThread { progressBar.progress = 90 }
+                
                 val fileName = "Singing_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.wav"
                 val wavFile = File(cacheDir, fileName)
                 saveAsWav(wavFile, finalMix, 44100)
@@ -176,7 +183,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Done! Saved to Music/Singing folder."
-                    Toast.makeText(this, "Professional studio mix saved!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Song with echo + guitar saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
                 }
             } catch (e: Exception) {
@@ -190,7 +197,8 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun applyProfessionalVocalProcessing(input: ShortArray): ShortArray {
+    // PROFESSIONAL ECHO/REVERB FOR VOCALS
+    private fun applyStudioEcho(input: ShortArray): ShortArray {
         if (input.isEmpty()) return input
         val sampleRate = 44100f
         val output = FloatArray(input.size)
@@ -200,54 +208,31 @@ class MainActivity : AppCompatActivity() {
             val absVal = abs(input[i].toFloat())
             if (absVal > maxVal) maxVal = absVal
         }
-        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.92f else 1f
+        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.90f else 1f
         
-        var lpState = 0f
-        val alpha = 0.25f
-        
-        val delay1 = (0.029f * sampleRate).toInt()
-        val delay2 = (0.037f * sampleRate).toInt()
-        val delay3 = (0.043f * sampleRate).toInt()
-        val delay4 = (0.053f * sampleRate).toInt()
-        
-        val buf1 = FloatArray(delay1)
-        val buf2 = FloatArray(delay2)
-        val buf3 = FloatArray(delay3)
-        val buf4 = FloatArray(delay4)
-        var p1 = 0; var p2 = 0; var p3 = 0; var p4 = 0
+        // Dual delay echo (300ms + 450ms) - very noticeable
+        val delay1Samples = (0.30f * sampleRate).toInt()
+        val delay2Samples = (0.45f * sampleRate).toInt()
+        val buf1 = FloatArray(delay1Samples)
+        val buf2 = FloatArray(delay2Samples)
+        var p1 = 0
+        var p2 = 0
         
         for (i in input.indices) {
-            var s = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
-            lpState += alpha * (s - lpState)
-            s = lpState
+            val s = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
             
-            val d1 = buf1[p1] * 0.6f
-            val d2 = buf2[p2] * 0.5f
-            val d3 = buf3[p3] * 0.4f
-            val d4 = buf4[p4] * 0.3f
+            val d1 = buf1[p1]
+            val d2 = buf2[p2]
             
-            buf1[p1] = s + d1 * 0.5f
-            buf2[p2] = s + d2 * 0.5f
-            buf3[p3] = s + d3 * 0.5f
-            buf4[p4] = s + d4 * 0.5f
+            // Feedback echo (repeats)
+            buf1[p1] = s + d1 * 0.45f
+            buf2[p2] = s + d2 * 0.40f
             
-            output[i] = s * 0.65f + (d1 + d2 + d3 + d4) * 0.35f
+            // Mix: dry voice + two echo layers
+            output[i] = s * 0.60f + d1 * 0.45f + d2 * 0.35f
             
-            p1 = (p1 + 1) % delay1
-            p2 = (p2 + 1) % delay2
-            p3 = (p3 + 1) % delay3
-            p4 = (p4 + 1) % delay4
-        }
-        
-        val threshold = 0.55f
-        val ratio = 3.5f
-        for (i in output.indices) {
-            var sample = output[i]
-            if (abs(sample) > threshold) {
-                sample = threshold + (abs(sample) - threshold) / ratio
-                if (output[i] < 0) sample = -sample
-            }
-            output[i] = sample
+            p1 = (p1 + 1) % delay1Samples
+            p2 = (p2 + 1) % delay2Samples
         }
         
         val result = ShortArray(output.size)
@@ -258,18 +243,23 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    private fun detectPitchAdvanced(data: ShortArray, start: Int, len: Int, sampleRate: Int): Float {
-        val block = FloatArray(len)
-        for (i in 0 until len) block[i] = data[start + i].toFloat()
+    // DETECT PITCH FROM AUDIO BLOCK
+    private fun detectPitch(data: ShortArray, start: Int, len: Int, sampleRate: Int): Float {
+        val end = min(data.size, start + len)
+        val actualLen = end - start
+        if (actualLen < 1024) return -1f
+        
+        val block = FloatArray(actualLen)
+        for (i in 0 until actualLen) block[i] = data[start + i].toFloat()
         
         var bestCorrelation = -1f
         var bestPeriod = -1
-        val minPeriod = sampleRate / 1000
-        val maxPeriod = sampleRate / 60
+        val minPeriod = sampleRate / 1000  // max 1000Hz
+        val maxPeriod = sampleRate / 60    // min 60Hz
         
         for (period in minPeriod until maxPeriod) {
             var correlation = 0f
-            for (i in 0 until len - period) {
+            for (i in 0 until actualLen - period) {
                 correlation += block[i] * block[i + period]
             }
             if (correlation > bestCorrelation) {
@@ -281,51 +271,75 @@ class MainActivity : AppCompatActivity() {
         return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else -1f
     }
 
-    private fun quantizeToScale(freq: Float): Float {
-        if (freq <= 0f) return -1f
-        val midi = 69f + 12f * (ln(freq / 440.0f) / ln(2.0f))
-        val roundedMidi = midi.roundToInt()
-        return 440f * 2.0.pow((roundedMidi - 69) / 12.0).toFloat()
+    // GET AMPLITUDE OF AUDIO BLOCK
+    private fun getAmplitude(data: ShortArray, start: Int, len: Int): Float {
+        var sum = 0f
+        val end = min(data.size, start + len)
+        for (i in start until end) sum += abs(data[i].toFloat())
+        return sum / (end - start)
     }
 
-    private fun generateProfessionalGuitarTrack(data: ShortArray, sampleRate: Int): ShortArray {
+    // QUANTIZE FREQUENCY TO NEAREST MUSICAL NOTE
+    private fun quantizeToNote(freq: Float): Float {
+        if (freq <= 0f) return -1f
+        val midi = 69f + 12f * (ln(freq / 440.0) / ln(2.0)).toFloat()
+        val roundedMidi = midi.roundToInt()
+        val exponent = (roundedMidi - 69) / 12.0
+        return 440f * (2.0.pow(exponent)).toFloat()
+    }
+
+    // GUITAR MUSIC THAT FOLLOWS YOUR SINGING PITCH
+    private fun generateGuitarFollowingVoice(data: ShortArray, sampleRate: Int): ShortArray {
         val length = data.size
         val output = FloatArray(length)
         
-        val blockSize = 22050
+        val blockSize = 22050  // 0.5 seconds - analyzes pitch twice per second
         val numBlocks = length / blockSize
         val blockPitches = FloatArray(numBlocks)
         
+        // STEP 1: Detect your singing pitch in each 0.5s block
         for (b in 0 until numBlocks) {
             val start = b * blockSize
             val amp = getAmplitude(data, start, 4096)
-            if (amp > 1500f) {
-                val rawPitch = detectPitchAdvanced(data, start, 4096, sampleRate)
-                blockPitches[b] = if (rawPitch in 100f..500f) quantizeToScale(rawPitch) else -1f
+            if (amp > 1500f) {  // Only detect if you're actually singing
+                val rawPitch = detectPitch(data, start, 4096, sampleRate)
+                blockPitches[b] = if (rawPitch in 100f..500f) quantizeToNote(rawPitch) else -1f
             } else {
-                blockPitches[b] = -1f
+                blockPitches[b] = -1f  // Silent block
             }
         }
         
-        var lastValidPitch = 220f
+        // STEP 2: Generate guitar that follows your detected pitch
+        var lastValidPitch = 220f  // Default to A3 if no pitch detected
         
         for (b in 0 until numBlocks) {
             val startSample = b * blockSize
             val endSample = min(length, startSample + blockSize)
             
             var rootFreq = blockPitches[b]
-            if (rootFreq < 0f) rootFreq = lastValidPitch
-            else lastValidPitch = rootFreq
+            if (rootFreq < 0f) {
+                rootFreq = lastValidPitch  // Hold last note during silence
+            } else {
+                lastValidPitch = rootFreq
+            }
             
-            val freqs = floatArrayOf(rootFreq, rootFreq * 1.5f, rootFreq * 2.0f, rootFreq * 2.5f)
+            // Guitar chord: Root + 5th + Octave (power chord - sounds like real guitar)
+            val freqs = floatArrayOf(
+                rootFreq,
+                rootFreq * 1.5f,   // Perfect 5th
+                rootFreq * 2.0f,   // Octave
+                rootFreq * 2.5f    // Major 3rd (2 octaves up)
+            )
+            
             val phases = FloatArray(freqs.size) { 0f }
             
             for (i in startSample until endSample) {
                 val t = (i - startSample).toFloat() / sampleRate
                 
-                val attack = 0.008f
-                val decay = 0.6f
-                var envelope = if (t < attack) {
+                // Guitar pluck envelope (fast attack, natural decay)
+                val attack = 0.01f
+                val decay = 0.5f
+                val envelope = if (t < attack) {
                     t / attack
                 } else {
                     exp((-2.5 * (t - attack) / decay).toDouble()).toFloat()
@@ -333,21 +347,24 @@ class MainActivity : AppCompatActivity() {
                 
                 var guitarSample = 0f
                 for (j in freqs.indices) {
+                    // Rich harmonic guitar sound
                     val phase = phases[j].toDouble()
                     val fundamental = sin(phase).toFloat()
-                    val harmonic2 = (0.4f * sin(2.0 * phase)).toFloat()
-                    val harmonic3 = (0.2f * sin(3.0 * phase)).toFloat()
-                    val harmonic4 = (0.1f * sin(4.0 * phase)).toFloat()
+                    val harmonic2 = (0.4 * sin(2.0 * phase)).toFloat()
+                    val harmonic3 = (0.2 * sin(3.0 * phase)).toFloat()
+                    val harmonic4 = (0.1 * sin(4.0 * phase)).toFloat()
                     
                     guitarSample += (fundamental + harmonic2 + harmonic3 + harmonic4) * (1.0f / freqs.size)
                     
+                    // Advance phase (phase-continuous = no clicking)
                     phases[j] = (phases[j] + 2.0f * PI.toFloat() * freqs[j] / sampleRate)
                     if (phases[j] >= 2.0f * PI.toFloat()) {
                         phases[j] -= 2.0f * PI.toFloat()
                     }
                 }
                 
-                output[i] += guitarSample * envelope * 0.55f
+                // LOUD guitar (0.55 volume)
+                output[i] = guitarSample * envelope * 0.55f
             }
         }
         
@@ -359,23 +376,19 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    private fun getAmplitude(data: ShortArray, start: Int, len: Int): Float {
-        var sum = 0f
-        val end = min(data.size, start + len)
-        for (i in start until end) sum += abs(data[i].toFloat())
-        return sum / (end - start)
-    }
-
-    private fun mixTracksProfessional(vocal: ShortArray, backing: ShortArray): ShortArray {
+    // MIX VOCAL + GUITAR
+    private fun mixVocalAndGuitar(vocal: ShortArray, guitar: ShortArray): ShortArray {
         val result = ShortArray(vocal.size)
         for (i in vocal.indices) {
-            val mixed = (vocal[i].toFloat() * 0.60f) + (backing[i].toFloat() * 0.55f)
+            // Vocal 60%, Guitar 55% - both loud and clear
+            val mixed = (vocal[i].toFloat() * 0.60f) + (guitar[i].toFloat() * 0.55f)
             val clamped = max(Short.MIN_VALUE.toFloat(), min(Short.MAX_VALUE.toFloat(), mixed))
             result[i] = clamped.toInt().toShort()
         }
         return result
     }
 
+    // SAVE AS WAV FILE
     private fun saveAsWav(file: File, pcmData: ShortArray, sampleRate: Int) {
         val channels = 1
         val bitsPerSample = 16
@@ -418,6 +431,7 @@ class MainActivity : AppCompatActivity() {
         header[offset + 1] = ((value.toInt() shr 8) and 0xff).toByte()
     }
 
+    // SAVE TO VISIBLE MUSIC FOLDER
     private fun saveToSharedStorage(wavFile: File, fileName: String) {
         try {
             val resolver = contentResolver
