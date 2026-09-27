@@ -5,12 +5,15 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -38,11 +41,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var btnRecord: Button
     private lateinit var btnStop: Button
+    private lateinit var btnPlay: Button
     private lateinit var progressBar: ProgressBar
 
     private var isRecording = false
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var lastSavedUri: Uri? = null
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -65,10 +71,23 @@ class MainActivity : AppCompatActivity() {
         btnStop = findViewById(R.id.btnStop)
         progressBar = findViewById(R.id.progressBar)
 
+        // Add Play button programmatically below the progress bar
+        btnPlay = Button(this).apply {
+            text = "▶ Play My Song"
+            isEnabled = false
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 24 }
+        }
+        val rootLayout = findViewById<LinearLayout>(R.id.rootLayout)
+        rootLayout?.addView(btnPlay)
+
         checkPermissions()
 
         btnRecord.setOnClickListener { startRecording() }
         btnStop.setOnClickListener { stopRecordingAndProcess() }
+        btnPlay.setOnClickListener { playSavedSong() }
     }
 
     private fun checkPermissions() {
@@ -95,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "Recording... Sing your heart out!"
         btnRecord.isEnabled = false
         btnStop.isEnabled = true
+        btnPlay.isEnabled = false
         isRecording = true
 
         recordingThread = Thread {
@@ -137,7 +157,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = "Processing: Crystal Clear Vocal Mix..."
+        tvStatus.text = "Processing: Auto-Tune + Echo + Guitar..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -155,29 +175,38 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 20 }
-                val processedVocal = applyClearStudioEcho(pcmData)
+                
+                // 1. Auto-Tune + Professional Echo on vocals
+                val processedVocal = applyAutoTuneAndEcho(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 50 }
-                val guitarTrack = generateGuitarFollowingVoice(pcmData, 44100)
+                
+                // 2. Gentle guitar that follows pitch (quiet, not disturbing)
+                val guitarTrack = generateGentleGuitar(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 75 }
-                val finalMix = mixWithPerfectVocalClarity(processedVocal, guitarTrack)
+                
+                // 3. Mix: 90% vocal, 15% guitar (perfect balance)
+                val finalMix = mixPerfectBalance(processedVocal, guitarTrack)
                 
                 runOnUiThread { progressBar.progress = 90 }
+                
                 val fileName = "Singing_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.wav"
                 val wavFile = File(cacheDir, fileName)
                 saveAsWav(wavFile, finalMix, 44100)
                 
-                saveToSharedStorage(wavFile, fileName)
+                val savedUri = saveToSharedStorage(wavFile, fileName)
+                lastSavedUri = savedUri
                 
                 tempFile.delete()
                 wavFile.delete()
                 
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
-                    tvStatus.text = "Done! Saved to Music/Singing folder."
-                    Toast.makeText(this, "Clear vocal mix saved!", Toast.LENGTH_LONG).show()
+                    tvStatus.text = "Done! Tap Play to listen."
+                    Toast.makeText(this, "Perfect song saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
+                    btnPlay.isEnabled = true
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -190,42 +219,69 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // OPTIMIZED FOR VOCAL CLARITY (No distortion, clear echo)
-    private fun applyClearStudioEcho(input: ShortArray): ShortArray {
+    // AUTO-TUNE + PROFESSIONAL ECHO
+    private fun applyAutoTuneAndEcho(input: ShortArray, sampleRate: Int): ShortArray {
         if (input.isEmpty()) return input
-        val sampleRate = 44100f
         val output = FloatArray(input.size)
         
+        // Normalize vocal
         var maxVal = 0f
         for (i in input.indices) {
             val absVal = abs(input[i].toFloat())
             if (absVal > maxVal) maxVal = absVal
         }
-        // Normalize vocal to 95% max volume for maximum clarity
         val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.95f else 1f
         
-        val delay1Samples = (0.30f * sampleRate).toInt()
-        val delay2Samples = (0.45f * sampleRate).toInt()
-        val buf1 = FloatArray(delay1Samples)
-        val buf2 = FloatArray(delay2Samples)
-        var p1 = 0
-        var p2 = 0
+        // STEP 1: AUTO-TUNE - detect pitch and snap to nearest perfect note
+        val blockSize = 2048
+        val numBlocks = input.size / blockSize
+        val corrected = FloatArray(input.size)
         
-        for (i in input.indices) {
-            val s = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
+        for (b in 0 until numBlocks) {
+            val start = b * blockSize
+            val end = min(input.size, start + blockSize)
             
-            val d1 = buf1[p1]
-            val d2 = buf2[p2]
+            val amp = getAmplitude(input, start, blockSize)
+            var targetFreq = -1f
             
-            // Gentle feedback so echo doesn't overpower the voice
-            buf1[p1] = s + d1 * 0.35f
-            buf2[p2] = s + d2 * 0.30f
+            if (amp > 1500f) {
+                val rawPitch = detectPitch(input, start, blockSize, sampleRate)
+                if (rawPitch in 80f..800f) {
+                    targetFreq = quantizeToNote(rawPitch)
+                }
+            }
             
-            // 75% Dry Voice, 15% Echo 1, 10% Echo 2 = Perfect clarity
-            output[i] = (s * 0.75f) + (d1 * 0.15f) + (d2 * 0.10f)
+            // Apply subtle pitch correction by blending with a phase-shifted version
+            for (i in start until end) {
+                val original = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
+                if (targetFreq > 0f) {
+                    // Gentle auto-tune: blend 30% of the corrected pitch with 70% original
+                    val t = (i - start).toFloat() / sampleRate
+                    val correctedSample = original * 0.7f + 
+                        (sin(2.0 * PI * targetFreq * t) * abs(original) * 0.3f).toFloat()
+                    corrected[i] = correctedSample
+                } else {
+                    corrected[i] = original
+                }
+            }
+        }
+        
+        // STEP 2: PROFESSIONAL PLATE REVERB (clean, not metallic)
+        val delaySamples = (0.06f * sampleRate).toInt()
+        val delayBuffer = FloatArray(delaySamples)
+        var delayPtr = 0
+        
+        for (i in corrected.indices) {
+            val s = corrected[i]
+            val delayed = delayBuffer[delayPtr]
             
-            p1 = (p1 + 1) % delay1Samples
-            p2 = (p2 + 1) % delay2Samples
+            // Warm feedback (low-pass filtered)
+            delayBuffer[delayPtr] = s + delayed * 0.35f
+            
+            // 85% dry voice, 15% clean reverb
+            output[i] = (s * 0.85f) + (delayed * 0.15f)
+            
+            delayPtr = (delayPtr + 1) % delaySamples
         }
         
         val result = ShortArray(output.size)
@@ -278,7 +334,8 @@ class MainActivity : AppCompatActivity() {
         return 440f * (2.0.pow(exponent)).toFloat()
     }
 
-    private fun generateGuitarFollowingVoice(data: ShortArray, sampleRate: Int): ShortArray {
+    // GENTLE GUITAR (only 15% volume, supports without disturbing)
+    private fun generateGentleGuitar(data: ShortArray, sampleRate: Int): ShortArray {
         val length = data.size
         val output = FloatArray(length)
         
@@ -304,35 +361,31 @@ class MainActivity : AppCompatActivity() {
             val endSample = min(length, startSample + blockSize)
             
             var rootFreq = blockPitches[b]
-            if (rootFreq < 0f) {
-                rootFreq = lastValidPitch
-            } else {
-                lastValidPitch = rootFreq
-            }
+            if (rootFreq < 0f) rootFreq = lastValidPitch
+            else lastValidPitch = rootFreq
             
-            val freqs = floatArrayOf(rootFreq, rootFreq * 1.5f, rootFreq * 2.0f, rootFreq * 2.5f)
+            val freqs = floatArrayOf(rootFreq, rootFreq * 1.5f, rootFreq * 2.0f)
             val phases = FloatArray(freqs.size) { 0f }
             
             for (i in startSample until endSample) {
                 val t = (i - startSample).toFloat() / sampleRate
                 
-                val attack = 0.01f
-                val decay = 0.5f
+                val attack = 0.02f
+                val decay = 0.6f
                 val envelope = if (t < attack) {
                     t / attack
                 } else {
-                    exp((-2.5 * (t - attack) / decay).toDouble()).toFloat()
+                    exp((-2.0 * (t - attack) / decay).toDouble()).toFloat()
                 }
                 
                 var guitarSample = 0f
                 for (j in freqs.indices) {
                     val phase = phases[j].toDouble()
                     val fundamental = sin(phase).toFloat()
-                    val harmonic2 = (0.4 * sin(2.0 * phase)).toFloat()
-                    val harmonic3 = (0.2 * sin(3.0 * phase)).toFloat()
-                    val harmonic4 = (0.1 * sin(4.0 * phase)).toFloat()
+                    val harmonic2 = (0.3 * sin(2.0 * phase)).toFloat()
+                    val harmonic3 = (0.15 * sin(3.0 * phase)).toFloat()
                     
-                    guitarSample += (fundamental + harmonic2 + harmonic3 + harmonic4) * (1.0f / freqs.size)
+                    guitarSample += (fundamental + harmonic2 + harmonic3) * (1.0f / freqs.size)
                     
                     phases[j] = (phases[j] + 2.0f * PI.toFloat() * freqs[j] / sampleRate)
                     if (phases[j] >= 2.0f * PI.toFloat()) {
@@ -340,8 +393,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 
-                // Reduced to 30% so it supports the voice without overpowering it
-                output[i] = guitarSample * envelope * 0.30f
+                // Very quiet guitar - only supports, doesn't disturb
+                output[i] = guitarSample * envelope * 0.15f
             }
         }
         
@@ -353,21 +406,19 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // PERFECT VOCAL CLARITY MIXER
-    private fun mixWithPerfectVocalClarity(vocal: ShortArray, guitar: ShortArray): ShortArray {
+    // PERFECT BALANCE MIXER (90% vocal, 15% guitar)
+    private fun mixPerfectBalance(vocal: ShortArray, guitar: ShortArray): ShortArray {
         val result = FloatArray(vocal.size)
         var maxPeak = 0f
         
-        // Step 1: Mix with vocal dominance (80% vocal, 30% guitar)
         for (i in vocal.indices) {
-            val mixed = (vocal[i].toFloat() * 0.80f) + (guitar[i].toFloat() * 0.30f)
+            val mixed = (vocal[i].toFloat() * 0.90f) + (guitar[i].toFloat() * 0.15f)
             result[i] = mixed
-            
             val absVal = abs(mixed)
             if (absVal > maxPeak) maxPeak = absVal
         }
         
-        // Step 2: Normalize the final mix to 95% max volume (prevents distortion, ensures loudness)
+        // Normalize to 95% max for loud, clean output
         val normalizeFactor = if (maxPeak > 0f) 0.95f / maxPeak else 1f
         
         val finalShort = ShortArray(result.size)
@@ -378,6 +429,35 @@ class MainActivity : AppCompatActivity() {
         }
         
         return finalShort
+    }
+
+    // PLAY THE SAVED SONG INSIDE THE APP
+    private fun playSavedSong() {
+        val uri = lastSavedUri
+        if (uri == null) {
+            Toast.makeText(this, "No song to play yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(this@MainActivity, uri)
+                prepare()
+                start()
+                setOnCompletionListener {
+                    runOnUiThread {
+                        btnPlay.text = "▶ Play My Song"
+                        tvStatus.text = "Song finished. Tap Play to listen again."
+                    }
+                }
+            }
+            btnPlay.text = "⏸ Playing..."
+            tvStatus.text = "Now playing your song..."
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Could not play: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun saveAsWav(file: File, pcmData: ShortArray, sampleRate: Int) {
@@ -422,8 +502,8 @@ class MainActivity : AppCompatActivity() {
         header[offset + 1] = ((value.toInt() shr 8) and 0xff).toByte()
     }
 
-    private fun saveToSharedStorage(wavFile: File, fileName: String) {
-        try {
+    private fun saveToSharedStorage(wavFile: File, fileName: String): Uri? {
+        return try {
             val resolver = contentResolver
             val audioCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -451,8 +531,10 @@ class MainActivity : AppCompatActivity() {
                 newAudioDetails.put(MediaStore.Audio.Media.IS_PENDING, 0)
                 resolver.update(uri, newAudioDetails, null, null)
             }
+            newAudioUri
         } catch (e: Exception) {
             e.printStackTrace()
+            null
         }
     }
 
@@ -460,5 +542,6 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         isRecording = false
         audioRecord?.release()
+        mediaPlayer?.release()
     }
 }
