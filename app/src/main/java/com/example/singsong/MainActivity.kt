@@ -137,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = "Processing: Dynamic Echo & Auto-Matching Music..."
+        tvStatus.text = "Processing: Cinematic Studio Mix..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -155,10 +155,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 30 }
-                val processedVocal = applyStudioEcho(pcmData)
+                val processedVocal = applyCinematicVocalProcessing(pcmData)
                 
                 runOnUiThread { progressBar.progress = 60 }
-                val backingTrack = generateDynamicBackingTrack(pcmData, 44100)
+                val backingTrack = generateCinematicBackingTrack(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 80 }
                 val finalMix = mixTracks(processedVocal, backingTrack)
@@ -176,7 +176,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Done! Saved to Music/Singing folder."
-                    Toast.makeText(this, "Dynamic studio mix saved!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Cinematic studio mix saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
                 }
             } catch (e: Exception) {
@@ -190,50 +190,46 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // --- DSP ENGINE: PROMINENT STUDIO ECHO ---
-    private fun applyStudioEcho(input: ShortArray): ShortArray {
+    // --- DSP ENGINE: CINEMATIC VOCAL PROCESSING ---
+    private fun applyCinematicVocalProcessing(input: ShortArray): ShortArray {
         if (input.isEmpty()) return input
         val sampleRate = 44100f
         val output = FloatArray(input.size)
         
+        // Normalize
         var maxVal = 0f
         for (i in input.indices) {
             val absVal = abs(input[i].toFloat())
             if (absVal > maxVal) maxVal = absVal
         }
-        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.85f else 1f
+        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.9f else 1f
         
+        // Gentle low-pass to remove harshness
         var lpState = 0f
-        val alpha = 0.2f 
+        val alpha = 0.18f
         
-        // DUAL DELAY ECHO (300ms and 450ms)
-        val delay1Samples = (0.30f * sampleRate).toInt()
-        val delay2Samples = (0.45f * sampleRate).toInt()
-        val buf1 = FloatArray(delay1Samples)
-        val buf2 = FloatArray(delay2Samples)
-        var p1 = 0; var p2 = 0
-        val fb1 = 0.45f; val fb2 = 0.4f
-        val wet1 = 0.45f; val wet2 = 0.35f
+        // Lush cinematic reverb (longer, smoother tail)
+        val delaySamples = (0.08f * sampleRate).toInt() // 80ms for spacious feel
+        val delayBuffer = FloatArray(delaySamples)
+        var delayPtr = 0
         
         for (i in input.indices) {
             var s = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
             lpState += alpha * (s - lpState)
             s = lpState
             
-            val d1 = buf1[p1]
-            val d2 = buf2[p2]
+            val delayed = delayBuffer[delayPtr]
+            val filteredFeedback = delayed * 0.55f // Longer, warmer tail
+            delayBuffer[delayPtr] = s + filteredFeedback
             
-            buf1[p1] = s + d1 * fb1
-            buf2[p2] = s + d2 * fb2
-            
-            output[i] = s + d1 * wet1 + d2 * wet2
-            
-            p1 = (p1 + 1) % delay1Samples
-            p2 = (p2 + 1) % delay2Samples
+            // 70% dry, 30% wet for cinematic blend
+            output[i] = (s * 0.70f) + (delayed * 0.30f)
+            delayPtr = (delayPtr + 1) % delaySamples
         }
         
-        val threshold = 0.6f
-        val ratio = 3.0f
+        // Soft compression
+        val threshold = 0.65f
+        val ratio = 2.5f
         for (i in output.indices) {
             var sample = output[i]
             if (abs(sample) > threshold) {
@@ -251,106 +247,103 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // --- DSP ENGINE: DYNAMIC PITCH & MUSIC MATCHING ---
-    private fun getAmplitude(data: ShortArray, start: Int, len: Int): Float {
-        var sum = 0f
-        val end = min(data.size, start + len)
-        for (i in start until end) sum += abs(data[i].toFloat())
-        return sum / (end - start)
-    }
-
-    private fun detectPitch(data: ShortArray, start: Int, len: Int, sampleRate: Int): Float {
-        val block = FloatArray(len)
-        for (i in 0 until len) block[i] = data[start + i].toFloat()
+    // --- DSP ENGINE: STABLE KEY DETECTION ---
+    private fun detectStableKey(data: ShortArray, sampleRate: Int): Float {
+        var maxAmp = 0f
+        var bestStart = 0
+        val blockSize = 88200 // 2 seconds for most stable detection
+        
+        for (i in 0 until data.size - blockSize step blockSize) {
+            var amp = 0f
+            for (j in 0 until blockSize) amp += abs(data[i + j].toFloat())
+            if (amp > maxAmp) { maxAmp = amp; bestStart = i }
+        }
+        
+        if (maxAmp < 100000f) return 220f // Default A3
+        
+        val block = FloatArray(blockSize)
+        for (i in 0 until blockSize) block[i] = data[bestStart + i].toFloat()
         
         var bestCorrelation = -1f
         var bestPeriod = -1
-        val minPeriod = sampleRate / 1000 
-        val maxPeriod = sampleRate / 60    
+        val minPeriod = sampleRate / 500
+        val maxPeriod = sampleRate / 80
         
         for (period in minPeriod until maxPeriod) {
             var correlation = 0f
-            for (i in 0 until len - period) {
-                correlation += block[i] * block[i + period]
-            }
-            if (correlation > bestCorrelation) {
-                bestCorrelation = correlation
-                bestPeriod = period
-            }
+            for (i in 0 until blockSize - period) correlation += block[i] * block[i + period]
+            if (correlation > bestCorrelation) { bestCorrelation = correlation; bestPeriod = period }
         }
         
-        return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else -1f
-    }
-
-    private fun quantizeToScale(freq: Float): Float {
-        if (freq <= 0f) return -1f
-        val midi = 69f + 12f * (ln(freq / 440.0f) / ln(2.0f))
+        val rawFreq = if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else 220f
+        
+        // Quantize to nearest perfect note
+        val midi = 69f + 12f * (ln(rawFreq / 440.0f) / ln(2.0f))
         val roundedMidi = midi.roundToInt()
         return 440f * 2.0.pow((roundedMidi - 69) / 12.0).toFloat()
     }
 
-    private fun generateDynamicBackingTrack(data: ShortArray, sampleRate: Int): ShortArray {
+    // --- DSP ENGINE: CINEMATIC BACKING TRACK ---
+    private fun generateCinematicBackingTrack(data: ShortArray, sampleRate: Int): ShortArray {
         val length = data.size
         val output = FloatArray(length)
         
-        val stepSize = 22050 // 0.5 seconds
-        val numBlocks = length / stepSize
-        val blockPitches = FloatArray(numBlocks)
+        // Detect key ONCE from the most stable part
+        val rootFreq = detectStableKey(data, sampleRate)
         
-        // 1. Detect & Quantize pitch for each 0.5s block
-        for (b in 0 until numBlocks) {
-            val start = b * stepSize
-            val amp = getAmplitude(data, start, 4096)
-            if (amp > 1500f) { 
-                val rawPitch = detectPitch(data, start, 4096, sampleRate)
-                blockPitches[b] = if (rawPitch in 100f..500f) quantizeToScale(rawPitch) else -1f
-            } else {
-                blockPitches[b] = -1f
+        // Cinematic chord progression: I - IV - V - I (slow movement)
+        val progression = arrayOf(
+            intArrayOf(0, 7, 12),   // I (Root, 5th, Octave)
+            intArrayOf(5, 12, 17),  // IV
+            intArrayOf(7, 14, 19),  // V
+            intArrayOf(0, 7, 12)    // I
+        )
+        
+        val chordDuration = 4.0f // Each chord lasts 4 seconds
+        val chordSamples = (chordDuration * sampleRate).toInt()
+        
+        // Phase-continuous oscillators for each note
+        val maxNotes = 3
+        val phases = Array(maxNotes) { FloatArray(maxNotes) { 0f } }
+        var currentChord = 0
+        var chordStartSample = 0
+        
+        for (i in 0 until length) {
+            // Change chord every 4 seconds
+            if (i - chordStartSample >= chordSamples) {
+                chordStartSample = i
+                currentChord = (currentChord + 1) % progression.size
             }
-        }
-        
-        // 2. Generate backing track following the detected pitches
-        var lastValidPitch = 220f 
-        
-        for (b in 0 until numBlocks) {
-            val startSample = b * stepSize
-            val endSample = min(length, startSample + stepSize)
             
-            var rootFreq = blockPitches[b]
-            if (rootFreq < 0f) rootFreq = lastValidPitch 
-            else lastValidPitch = rootFreq
+            val chord = progression[currentChord]
+            val timeInChord = (i - chordStartSample).toFloat() / sampleRate
             
-            // Generate 4 beats within this 0.5s block
-            val beatSamples = stepSize / 4
-            for (beat in 0 until 4) {
-                val beatStart = startSample + beat * beatSamples
-                val beatEnd = min(length, beatStart + beatSamples)
-                val isBeat1 = (beat == 0)
+            // Smooth envelope for chord transitions (no clicking)
+            val fadeIn = min(1f, timeInChord / 0.5f) // 0.5s fade in
+            val fadeOut = min(1f, (chordDuration - timeInChord) / 0.5f) // 0.5s fade out
+            val envelope = fadeIn * fadeOut
+            
+            var sample = 0f
+            
+            // Generate warm string pad (additive synthesis with harmonics)
+            for (n in chord.indices) {
+                val semitone = chord[n]
+                val freq = (rootFreq * 2.0.pow(semitone.toDouble() / 12.0)).toFloat()
                 
-                for (i in beatStart until beatEnd) {
-                    val t = (i - beatStart).toFloat() / sampleRate
-                    
-                    val attack = 0.015f
-                    var env = if (t < attack) t / attack else exp(-5.0 * (t - attack)).toFloat()
-                    
-                    if (isBeat1) {
-                        val bassFreq = rootFreq / 2f 
-                        val bass = sin(2.0 * PI * bassFreq * t) + 0.3 * sin(2.0 * PI * bassFreq * 2 * t)
-                        output[i] += bass * env * 0.4f
-                    }
-                    
-                    val f1 = rootFreq
-                    val f2 = rootFreq * 1.25f
-                    val f3 = rootFreq * 1.5f
-                    
-                    var chord = 0.0
-                    chord += sin(2.0 * PI * f1 * t)
-                    chord += 0.6 * sin(2.0 * PI * f2 * t)
-                    chord += 0.4 * sin(2.0 * PI * f3 * t)
-                    
-                    output[i] += chord * env * 0.25f 
-                }
+                // Fundamental + harmonics for rich string sound
+                var noteSample = sin(phases[n][0]).toFloat()
+                noteSample += 0.5f * sin(phases[n][1]).toFloat()
+                noteSample += 0.25f * sin(phases[n][2]).toFloat()
+                
+                sample += noteSample * 0.3f
+                
+                // Advance phases (phase-continuous)
+                phases[n][0] = (phases[n][0] + 2.0f * PI.toFloat() * freq / sampleRate) % (2.0f * PI.toFloat())
+                phases[n][1] = (phases[n][1] + 2.0f * PI.toFloat() * freq * 2 / sampleRate) % (2.0f * PI.toFloat())
+                phases[n][2] = (phases[n][2] + 2.0f * PI.toFloat() * freq * 3 / sampleRate) % (2.0f * PI.toFloat())
             }
+            
+            output[i] = sample * envelope * 0.15f // Very subtle backing (15% volume)
         }
         
         val result = ShortArray(length)
@@ -361,16 +354,19 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
+    // --- DSP ENGINE: MIXING ---
     private fun mixTracks(vocal: ShortArray, backing: ShortArray): ShortArray {
         val result = ShortArray(vocal.size)
         for (i in vocal.indices) {
-            val mixed = (vocal[i].toFloat() * 0.75f) + (backing[i].toFloat() * 0.25f)
+            // Vocal 85%, Backing 15% - voice is always front and center
+            val mixed = (vocal[i].toFloat() * 0.85f) + (backing[i].toFloat() * 0.15f)
             val clamped = max(Short.MIN_VALUE.toFloat(), min(Short.MAX_VALUE.toFloat(), mixed))
             result[i] = clamped.toInt().toShort()
         }
         return result
     }
 
+    // --- FILE ENCODING ---
     private fun saveAsWav(file: File, pcmData: ShortArray, sampleRate: Int) {
         val channels = 1
         val bitsPerSample = 16
