@@ -26,8 +26,11 @@ import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class MainActivity : AppCompatActivity() {
@@ -134,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = "Processing: Applying Studio Reverb & Auto-Guitar..."
+        tvStatus.text = "Processing: Dynamic Echo & Auto-Matching Music..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -152,39 +155,28 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 30 }
-                
-                // 1. Apply Studio-Quality Vocal Processing
-                val processedVocal = applyStudioVocalEffects(pcmData)
+                val processedVocal = applyStudioEcho(pcmData)
                 
                 runOnUiThread { progressBar.progress = 60 }
-                
-                // 2. Detect Stable Pitch & Generate Rich Guitar
-                val pitch = detectStablePitch(pcmData, 44100)
-                val backingTrack = generateRichGuitarTrack(processedVocal.size, pitch, 44100)
+                val backingTrack = generateDynamicBackingTrack(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 80 }
-                
-                // 3. Mix Tracks
                 val finalMix = mixTracks(processedVocal, backingTrack)
                 
                 runOnUiThread { progressBar.progress = 90 }
-                
-                // 4. Save to WAV
                 val fileName = "Singing_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.wav"
                 val wavFile = File(cacheDir, fileName)
                 saveAsWav(wavFile, finalMix, 44100)
                 
-                // 5. Move to Visible Internal Storage
                 saveToSharedStorage(wavFile, fileName)
                 
-                // Cleanup
                 tempFile.delete()
                 wavFile.delete()
                 
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Done! Saved to Music/Singing folder."
-                    Toast.makeText(this, "Professional studio mix saved!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Dynamic studio mix saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
                 }
             } catch (e: Exception) {
@@ -198,50 +190,59 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // --- DSP ENGINE: STUDIO VOCAL PROCESSING ---
-    private fun applyStudioVocalEffects(input: ShortArray): ShortArray {
+    // --- DSP ENGINE: PROMINENT STUDIO ECHO ---
+    private fun applyStudioEcho(input: ShortArray): ShortArray {
         if (input.isEmpty()) return input
         val sampleRate = 44100f
         val output = FloatArray(input.size)
         
-        // 1. Normalize to prevent clipping
         var maxVal = 0f
         for (i in input.indices) {
             val absVal = abs(input[i].toFloat())
             if (absVal > maxVal) maxVal = absVal
         }
-        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.85f else 1f // 0.85 headroom
+        val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.85f else 1f
         
-        // 2. Gentle Low-Pass Filter (removes harsh "robotic" digital mic artifacts)
         var lpState = 0f
-        val alpha = 0.15f 
+        val alpha = 0.2f 
         
-        // 3. Warm Studio Reverb (Low-pass filtered feedback delay)
-        val delaySamples = (0.045f * sampleRate).toInt() // ~45ms delay for room feel
-        val delayBuffer = FloatArray(delaySamples)
-        var delayPtr = 0
+        // DUAL DELAY ECHO (300ms and 450ms)
+        val delay1Samples = (0.30f * sampleRate).toInt()
+        val delay2Samples = (0.45f * sampleRate).toInt()
+        val buf1 = FloatArray(delay1Samples)
+        val buf2 = FloatArray(delay2Samples)
+        var p1 = 0; var p2 = 0
+        val fb1 = 0.45f; val fb2 = 0.4f
+        val wet1 = 0.45f; val wet2 = 0.35f
         
         for (i in input.indices) {
-            // Normalize
-            var sample = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
+            var s = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
+            lpState += alpha * (s - lpState)
+            s = lpState
             
-            // Low-pass filter
-            lpState += alpha * (sample - lpState)
-            sample = lpState
+            val d1 = buf1[p1]
+            val d2 = buf2[p2]
             
-            // Warm Reverb
-            val delayed = delayBuffer[delayPtr]
-            // Apply low-pass to feedback so reverb tail is warm, not metallic
-            val filteredFeedback = delayed * 0.45f 
-            delayBuffer[delayPtr] = sample + filteredFeedback
+            buf1[p1] = s + d1 * fb1
+            buf2[p2] = s + d2 * fb2
             
-            // Mix dry (65%) and wet (35%)
-            output[i] = (sample * 0.65f) + (delayed * 0.35f)
+            output[i] = s + d1 * wet1 + d2 * wet2
             
-            delayPtr = (delayPtr + 1) % delaySamples
+            p1 = (p1 + 1) % delay1Samples
+            p2 = (p2 + 1) % delay2Samples
         }
         
-        // Convert back to 16-bit PCM with strict clamping
+        val threshold = 0.6f
+        val ratio = 3.0f
+        for (i in output.indices) {
+            var sample = output[i]
+            if (abs(sample) > threshold) {
+                sample = threshold + (abs(sample) - threshold) / ratio
+                if (output[i] < 0) sample = -sample
+            }
+            output[i] = sample
+        }
+        
         val result = ShortArray(output.size)
         for (i in output.indices) {
             val clamped = max(-1f, min(1f, output[i]))
@@ -250,40 +251,26 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // --- DSP ENGINE: STABLE PITCH DETECTION ---
-    private fun detectStablePitch(data: ShortArray, sampleRate: Int): Float {
-        var maxAmp = 0f
-        var bestStart = 0
-        val blockSize = 4096 // Larger block for more stable pitch detection
+    // --- DSP ENGINE: DYNAMIC PITCH & MUSIC MATCHING ---
+    private fun getAmplitude(data: ShortArray, start: Int, len: Int): Float {
+        var sum = 0f
+        val end = min(data.size, start + len)
+        for (i in start until end) sum += abs(data[i].toFloat())
+        return sum / (end - start)
+    }
+
+    private fun detectPitch(data: ShortArray, start: Int, len: Int, sampleRate: Int): Float {
+        val block = FloatArray(len)
+        for (i in 0 until len) block[i] = data[start + i].toFloat()
         
-        // Find the loudest 4096-sample block (most likely the sustained singing part)
-        for (i in 0 until data.size - blockSize step blockSize) {
-            var amp = 0f
-            for (j in 0 until blockSize) {
-                amp += abs(data[i + j].toFloat())
-            }
-            if (amp > maxAmp) {
-                maxAmp = amp
-                bestStart = i
-            }
-        }
-        
-        if (maxAmp < 50000f) return 220f // Default to A3 if too quiet
-        
-        val block = FloatArray(blockSize)
-        for (i in 0 until blockSize) {
-            block[i] = data[bestStart + i].toFloat()
-        }
-        
-        // Autocorrelation
         var bestCorrelation = -1f
         var bestPeriod = -1
-        val minPeriod = sampleRate / 500  // Max 500Hz
-        val maxPeriod = sampleRate / 60    // Min 60Hz
+        val minPeriod = sampleRate / 1000 
+        val maxPeriod = sampleRate / 60    
         
         for (period in minPeriod until maxPeriod) {
             var correlation = 0f
-            for (i in 0 until blockSize - period) {
+            for (i in 0 until len - period) {
                 correlation += block[i] * block[i + period]
             }
             if (correlation > bestCorrelation) {
@@ -292,46 +279,78 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else 220f
+        return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else -1f
     }
 
-    // --- DSP ENGINE: RICH GUITAR SYNTHESIS (ZERO CLICKING) ---
-    private fun generateRichGuitarTrack(length: Int, rootFreq: Float, sampleRate: Int): ShortArray {
+    private fun quantizeToScale(freq: Float): Float {
+        if (freq <= 0f) return -1f
+        val midi = 69f + 12f * (ln(freq / 440.0f) / ln(2.0f))
+        val roundedMidi = midi.roundToInt()
+        return 440f * 2.0.pow((roundedMidi - 69) / 12.0).toFloat()
+    }
+
+    private fun generateDynamicBackingTrack(data: ShortArray, sampleRate: Int): ShortArray {
+        val length = data.size
         val output = FloatArray(length)
         
-        // Rich Guitar Chord: Root, Octave, Major 3rd, Perfect 5th
-        val freqs = floatArrayOf(rootFreq, rootFreq * 2.0f, rootFreq * 1.25f, rootFreq * 1.5f)
+        val stepSize = 22050 // 0.5 seconds
+        val numBlocks = length / stepSize
+        val blockPitches = FloatArray(numBlocks)
         
-        // Phase-continuous oscillators (prevents clicking/beating)
-        val phases = FloatArray(freqs.size) { 0f }
-        
-        val strumIntervalSamples = (1.2f * sampleRate).toInt() // Strum every 1.2 seconds
-        
-        for (i in 0 until length) {
-            val timeInStrum = (i % strumIntervalSamples).toFloat() / sampleRate
-            
-            // Smooth ADSR Envelope (Attack 30ms, Decay 0.8s) - NO HARD RESETS
-            val envelope = if (timeInStrum < 0.03f) {
-                timeInStrum / 0.03f // Smooth attack
+        // 1. Detect & Quantize pitch for each 0.5s block
+        for (b in 0 until numBlocks) {
+            val start = b * stepSize
+            val amp = getAmplitude(data, start, 4096)
+            if (amp > 1500f) { 
+                val rawPitch = detectPitch(data, start, 4096, sampleRate)
+                blockPitches[b] = if (rawPitch in 100f..500f) quantizeToScale(rawPitch) else -1f
             } else {
-                exp(-1.5f * (timeInStrum - 0.03f)) // Natural decay
+                blockPitches[b] = -1f
             }
+        }
+        
+        // 2. Generate backing track following the detected pitches
+        var lastValidPitch = 220f 
+        
+        for (b in 0 until numBlocks) {
+            val startSample = b * stepSize
+            val endSample = min(length, startSample + stepSize)
             
-            var sample = 0f
-            for (j in freqs.indices) {
-                // Phase-continuous sine wave
-                val currentPhase = phases[j]
-                sample += sin(currentPhase).toFloat()
+            var rootFreq = blockPitches[b]
+            if (rootFreq < 0f) rootFreq = lastValidPitch 
+            else lastValidPitch = rootFreq
+            
+            // Generate 4 beats within this 0.5s block
+            val beatSamples = stepSize / 4
+            for (beat in 0 until 4) {
+                val beatStart = startSample + beat * beatSamples
+                val beatEnd = min(length, beatStart + beatSamples)
+                val isBeat1 = (beat == 0)
                 
-                // Advance phase
-                phases[j] = (currentPhase + 2.0f * PI.toFloat() * freqs[j] / sampleRate)
-                if (phases[j] >= 2.0f * PI.toFloat()) {
-                    phases[j] -= 2.0f * PI.toFloat()
+                for (i in beatStart until beatEnd) {
+                    val t = (i - beatStart).toFloat() / sampleRate
+                    
+                    val attack = 0.015f
+                    var env = if (t < attack) t / attack else exp(-5.0 * (t - attack)).toFloat()
+                    
+                    if (isBeat1) {
+                        val bassFreq = rootFreq / 2f 
+                        val bass = sin(2.0 * PI * bassFreq * t) + 0.3 * sin(2.0 * PI * bassFreq * 2 * t)
+                        output[i] += bass * env * 0.4f
+                    }
+                    
+                    val f1 = rootFreq
+                    val f2 = rootFreq * 1.25f
+                    val f3 = rootFreq * 1.5f
+                    
+                    var chord = 0.0
+                    chord += sin(2.0 * PI * f1 * t)
+                    chord += 0.6 * sin(2.0 * PI * f2 * t)
+                    chord += 0.4 * sin(2.0 * PI * f3 * t)
+                    
+                    output[i] += chord * env * 0.25f 
                 }
             }
-            
-            // Average the oscillators and apply envelope
-            output[i] = (sample / freqs.size) * envelope * 0.5f // 0.5f master volume for backing
         }
         
         val result = ShortArray(length)
@@ -342,11 +361,9 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // --- DSP ENGINE: MIXING ---
     private fun mixTracks(vocal: ShortArray, backing: ShortArray): ShortArray {
         val result = ShortArray(vocal.size)
         for (i in vocal.indices) {
-            // Vocal 75%, Backing 25% for a professional vocal-forward mix
             val mixed = (vocal[i].toFloat() * 0.75f) + (backing[i].toFloat() * 0.25f)
             val clamped = max(Short.MIN_VALUE.toFloat(), min(Short.MAX_VALUE.toFloat(), mixed))
             result[i] = clamped.toInt().toShort()
@@ -354,7 +371,6 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // --- FILE ENCODING ---
     private fun saveAsWav(file: File, pcmData: ShortArray, sampleRate: Int) {
         val channels = 1
         val bitsPerSample = 16
@@ -397,7 +413,6 @@ class MainActivity : AppCompatActivity() {
         header[offset + 1] = ((value.toInt() shr 8) and 0xff).toByte()
     }
 
-    // --- MEDIASTORE SAVE ---
     private fun saveToSharedStorage(wavFile: File, fileName: String) {
         try {
             val resolver = contentResolver
