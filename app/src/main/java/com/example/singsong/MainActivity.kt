@@ -71,7 +71,6 @@ class MainActivity : AppCompatActivity() {
         btnStop = findViewById(R.id.btnStop)
         progressBar = findViewById(R.id.progressBar)
 
-        // Add Play button programmatically below the progress bar
         btnPlay = Button(this).apply {
             text = "▶ Play My Song"
             isEnabled = false
@@ -157,7 +156,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = "Processing: Auto-Tune + Echo + Guitar..."
+        tvStatus.text = "Processing: Professional Studio Mix..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -175,18 +174,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 20 }
-                
-                // 1. Auto-Tune + Professional Echo on vocals
-                val processedVocal = applyAutoTuneAndEcho(pcmData, 44100)
+                val processedVocal = applyProfessionalMix(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 50 }
-                
-                // 2. Gentle guitar that follows pitch (quiet, not disturbing)
-                val guitarTrack = generateGentleGuitar(pcmData, 44100)
+                val guitarTrack = generateSupportingGuitar(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 75 }
-                
-                // 3. Mix: 90% vocal, 15% guitar (perfect balance)
                 val finalMix = mixPerfectBalance(processedVocal, guitarTrack)
                 
                 runOnUiThread { progressBar.progress = 90 }
@@ -204,7 +197,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Done! Tap Play to listen."
-                    Toast.makeText(this, "Perfect song saved!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Perfect professional song saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
                     btnPlay.isEnabled = true
                 }
@@ -219,12 +212,11 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // AUTO-TUNE + PROFESSIONAL ECHO
-    private fun applyAutoTuneAndEcho(input: ShortArray, sampleRate: Int): ShortArray {
+    // PROFESSIONAL BALANCED MIX - subtle, polished effects
+    private fun applyProfessionalMix(input: ShortArray, sampleRate: Int): ShortArray {
         if (input.isEmpty()) return input
         val output = FloatArray(input.size)
         
-        // Normalize vocal
         var maxVal = 0f
         for (i in input.indices) {
             val absVal = abs(input[i].toFloat())
@@ -232,7 +224,7 @@ class MainActivity : AppCompatActivity() {
         }
         val normFactor = if (maxVal > 0f) (Short.MAX_VALUE.toFloat() / maxVal) * 0.95f else 1f
         
-        // STEP 1: AUTO-TUNE - detect pitch and snap to nearest perfect note
+        // STEP 1: GENTLE AUTO-TUNE (30% - natural correction)
         val blockSize = 2048
         val numBlocks = input.size / blockSize
         val corrected = FloatArray(input.size)
@@ -251,14 +243,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            // Apply subtle pitch correction by blending with a phase-shifted version
             for (i in start until end) {
                 val original = (input[i].toFloat() * normFactor) / Short.MAX_VALUE
                 if (targetFreq > 0f) {
-                    // Gentle auto-tune: blend 30% of the corrected pitch with 70% original
                     val t = (i - start).toFloat() / sampleRate
-                    val correctedSample = original * 0.7f + 
-                        (sin(2.0 * PI * targetFreq * t) * abs(original) * 0.3f).toFloat()
+                    // Gentle 30% correction
+                    val correctedSample = original * 0.70f + 
+                        (sin(2.0 * PI * targetFreq * t) * abs(original) * 0.30f).toFloat()
                     corrected[i] = correctedSample
                 } else {
                     corrected[i] = original
@@ -266,22 +257,56 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // STEP 2: PROFESSIONAL PLATE REVERB (clean, not metallic)
-        val delaySamples = (0.06f * sampleRate).toInt()
-        val delayBuffer = FloatArray(delaySamples)
-        var delayPtr = 0
+        // STEP 2: SUBTLE REVERB (20% - smooth hall warmth)
+        val reverbTaps = intArrayOf(
+            (0.013f * sampleRate).toInt(),
+            (0.019f * sampleRate).toInt(),
+            (0.029f * sampleRate).toInt(),
+            (0.037f * sampleRate).toInt(),
+            (0.053f * sampleRate).toInt(),
+            (0.071f * sampleRate).toInt()
+        )
+        
+        val reverbBuffers = Array(reverbTaps.size) { FloatArray(reverbTaps[it]) }
+        val reverbPtrs = IntArray(reverbTaps.size) { 0 }
+        val reverbGains = floatArrayOf(0.5f, 0.4f, 0.3f, 0.25f, 0.2f, 0.15f)
+        
+        val afterReverb = FloatArray(corrected.size)
         
         for (i in corrected.indices) {
             val s = corrected[i]
-            val delayed = delayBuffer[delayPtr]
+            var reverbSum = 0f
             
-            // Warm feedback (low-pass filtered)
-            delayBuffer[delayPtr] = s + delayed * 0.35f
+            for (t in reverbTaps.indices) {
+                val delayed = reverbBuffers[t][reverbPtrs[t]]
+                reverbSum += delayed * reverbGains[t]
+                
+                val feedback = s + delayed * 0.30f
+                reverbBuffers[t][reverbPtrs[t]] = feedback * 0.80f
+                
+                reverbPtrs[t] = (reverbPtrs[t] + 1) % reverbTaps[t]
+            }
             
-            // 85% dry voice, 15% clean reverb
+            // 80% dry voice, 20% subtle reverb
+            afterReverb[i] = (s * 0.80f) + (reverbSum * 0.20f)
+        }
+        
+        // STEP 3: LIGHT ECHO (15% - gentle repetitions)
+        val echoDelaySamples = (0.35f * sampleRate).toInt()
+        val echoBuffer = FloatArray(echoDelaySamples)
+        var echoPtr = 0
+        
+        for (i in afterReverb.indices) {
+            val s = afterReverb[i]
+            val delayed = echoBuffer[echoPtr]
+            
+            // Gentle feedback
+            echoBuffer[echoPtr] = s + delayed * 0.25f
+            
+            // 85% voice, 15% light echo
             output[i] = (s * 0.85f) + (delayed * 0.15f)
             
-            delayPtr = (delayPtr + 1) % delaySamples
+            echoPtr = (echoPtr + 1) % echoDelaySamples
         }
         
         val result = ShortArray(output.size)
@@ -334,8 +359,8 @@ class MainActivity : AppCompatActivity() {
         return 440f * (2.0.pow(exponent)).toFloat()
     }
 
-    // GENTLE GUITAR (only 15% volume, supports without disturbing)
-    private fun generateGentleGuitar(data: ShortArray, sampleRate: Int): ShortArray {
+    // SUPPORTING GUITAR (25% - enhances without competing)
+    private fun generateSupportingGuitar(data: ShortArray, sampleRate: Int): ShortArray {
         val length = data.size
         val output = FloatArray(length)
         
@@ -364,28 +389,29 @@ class MainActivity : AppCompatActivity() {
             if (rootFreq < 0f) rootFreq = lastValidPitch
             else lastValidPitch = rootFreq
             
-            val freqs = floatArrayOf(rootFreq, rootFreq * 1.5f, rootFreq * 2.0f)
+            val freqs = floatArrayOf(rootFreq, rootFreq * 1.5f, rootFreq * 2.0f, rootFreq * 2.5f)
             val phases = FloatArray(freqs.size) { 0f }
             
             for (i in startSample until endSample) {
                 val t = (i - startSample).toFloat() / sampleRate
                 
-                val attack = 0.02f
-                val decay = 0.6f
+                val attack = 0.015f
+                val decay = 0.5f
                 val envelope = if (t < attack) {
                     t / attack
                 } else {
-                    exp((-2.0 * (t - attack) / decay).toDouble()).toFloat()
+                    exp((-2.5 * (t - attack) / decay).toDouble()).toFloat()
                 }
                 
                 var guitarSample = 0f
                 for (j in freqs.indices) {
                     val phase = phases[j].toDouble()
                     val fundamental = sin(phase).toFloat()
-                    val harmonic2 = (0.3 * sin(2.0 * phase)).toFloat()
-                    val harmonic3 = (0.15 * sin(3.0 * phase)).toFloat()
+                    val harmonic2 = (0.4 * sin(2.0 * phase)).toFloat()
+                    val harmonic3 = (0.2 * sin(3.0 * phase)).toFloat()
+                    val harmonic4 = (0.1 * sin(4.0 * phase)).toFloat()
                     
-                    guitarSample += (fundamental + harmonic2 + harmonic3) * (1.0f / freqs.size)
+                    guitarSample += (fundamental + harmonic2 + harmonic3 + harmonic4) * (1.0f / freqs.size)
                     
                     phases[j] = (phases[j] + 2.0f * PI.toFloat() * freqs[j] / sampleRate)
                     if (phases[j] >= 2.0f * PI.toFloat()) {
@@ -393,8 +419,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 
-                // Very quiet guitar - only supports, doesn't disturb
-                output[i] = guitarSample * envelope * 0.15f
+                // Supporting guitar - 25% volume
+                output[i] = guitarSample * envelope * 0.25f
             }
         }
         
@@ -406,19 +432,20 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    // PERFECT BALANCE MIXER (90% vocal, 15% guitar)
+    // PERFECT BALANCE MIXER (80% vocal, 25% guitar)
     private fun mixPerfectBalance(vocal: ShortArray, guitar: ShortArray): ShortArray {
         val result = FloatArray(vocal.size)
         var maxPeak = 0f
         
         for (i in vocal.indices) {
-            val mixed = (vocal[i].toFloat() * 0.90f) + (guitar[i].toFloat() * 0.15f)
+            // 80% vocal, 25% guitar - voice is dominant
+            val mixed = (vocal[i].toFloat() * 0.80f) + (guitar[i].toFloat() * 0.25f)
             result[i] = mixed
             val absVal = abs(mixed)
             if (absVal > maxPeak) maxPeak = absVal
         }
         
-        // Normalize to 95% max for loud, clean output
+        // Normalize to 95% for loud, clean output
         val normalizeFactor = if (maxPeak > 0f) 0.95f / maxPeak else 1f
         
         val finalShort = ShortArray(result.size)
@@ -431,7 +458,6 @@ class MainActivity : AppCompatActivity() {
         return finalShort
     }
 
-    // PLAY THE SAVED SONG INSIDE THE APP
     private fun playSavedSong() {
         val uri = lastSavedUri
         if (uri == null) {
