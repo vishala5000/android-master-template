@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
@@ -83,7 +84,6 @@ class MainActivity : AppCompatActivity() {
     
     private fun loadAIModels() {
         try {
-            // Load Auto-Tune model
             val autoTuneModel = loadModelFile("autotune_model.tflite")
             if (autoTuneModel != null) {
                 val options = Interpreter.Options().apply {
@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
                 hasAutoTuneModel = true
             }
             
-            // Load Music Generation model
             val musicGenModel = loadModelFile("musicgen_model.tflite")
             if (musicGenModel != null) {
                 val options = Interpreter.Options().apply {
@@ -267,10 +266,8 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
     
-    // AI AUTO-TUNE PROCESSING
     private fun applyAIAutoTune(input: ShortArray): ShortArray {
         return try {
-            // Convert to float array for model
             val inputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
             val floatBuffer = inputBuffer.asFloatBuffer()
             for (sample in input) {
@@ -278,11 +275,9 @@ class MainActivity : AppCompatActivity() {
             }
             inputBuffer.rewind()
             
-            // Run inference
             val outputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
             autoTuneInterpreter?.run(inputBuffer, outputBuffer)
             
-            // Convert back to short array
             outputBuffer.rewind()
             val outputFloat = outputBuffer.asFloatBuffer()
             val result = ShortArray(input.size)
@@ -296,14 +291,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // AI MUSIC GENERATION
     private fun generateAIMusicTrack(input: ShortArray): ShortArray {
         return try {
-            // Prepare input (pitch features)
             val inputBuffer = ByteBuffer.allocateDirect(4096 * 4).order(ByteOrder.nativeOrder())
             val floatBuffer = inputBuffer.asFloatBuffer()
             
-            // Extract pitch features from input
             val blockSize = min(4096, input.size)
             for (i in 0 until blockSize) {
                 floatBuffer.put(input[i].toFloat() / Short.MAX_VALUE)
@@ -313,11 +305,9 @@ class MainActivity : AppCompatActivity() {
             }
             inputBuffer.rewind()
             
-            // Generate music
             val outputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
             musicGenInterpreter?.run(inputBuffer, outputBuffer)
             
-            // Convert to short array
             outputBuffer.rewind()
             val outputFloat = outputBuffer.asFloatBuffer()
             val result = ShortArray(input.size)
@@ -331,7 +321,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // DSP FALLBACK
     private fun applyProfessionalVocalProcessing(input: ShortArray): ShortArray {
         if (input.isEmpty()) return input
         val sampleRate = 44100f
