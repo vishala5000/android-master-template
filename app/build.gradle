@@ -36,49 +36,13 @@ android {
     }
 }
 
-// Auto-download lightweight AI models before build
-task downloadModels {
-    doLast {
-        def assetsDir = file('src/main/assets')
-        assetsDir.mkdirs()
-        
-        def models = [
-            [
-                url: 'https://huggingface.co/lukas/autotune-tflite/resolve/main/autotune_quantized.tflite',
-                name: 'autotune_model.tflite'
-            ],
-            [
-                url: 'https://huggingface.co/lukas/musicgen-mobile/resolve/main/musicgen_small_quantized.tflite',
-                name: 'musicgen_model.tflite'
-            ]
-        ]
-        
-        models.each { model ->
-            def file = new File(assetsDir, model.name)
-            if (!file.exists()) {
-                println "Downloading ${model.name}..."
-                try {
-                    new URL(model.url).withInputStream { i ->
-                        file.withOutputStream { it << i }
-                    }
-                    println "Downloaded ${model.name}"
-                } catch (Exception e) {
-                    println "Warning: Could not download ${model.name}, will use DSP fallback"
-                }
-            }
-        }
-    }
-}
-
-preBuild.dependsOn downloadModels
-
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // TensorFlow Lite (lightweight)
+    // TensorFlow Lite (ready for future AI models if you add them manually)
     implementation 'org.tensorflow:tensorflow-lite:2.14.0'
     implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
 }
