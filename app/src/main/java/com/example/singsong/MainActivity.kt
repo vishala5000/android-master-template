@@ -3,7 +3,6 @@ package com.example.singsong
 import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
-import android.content.res.AssetFileDescriptor
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -19,11 +18,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.io.File
-import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,7 +32,6 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import org.tensorflow.lite.Interpreter
 
 class MainActivity : AppCompatActivity() {
 
@@ -48,11 +43,6 @@ class MainActivity : AppCompatActivity() {
     private var isRecording = false
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
-    
-    private var autoTuneInterpreter: Interpreter? = null
-    private var musicGenInterpreter: Interpreter? = null
-    private var hasAutoTuneModel = false
-    private var hasMusicGenModel = false
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -76,56 +66,9 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
 
         checkPermissions()
-        loadAIModels()
 
         btnRecord.setOnClickListener { startRecording() }
         btnStop.setOnClickListener { stopRecordingAndProcess() }
-    }
-    
-    private fun loadAIModels() {
-        try {
-            val autoTuneModel = loadModelFile("autotune_model.tflite")
-            if (autoTuneModel != null) {
-                val options = Interpreter.Options().apply {
-                    setNumThreads(4)
-                    useNNAPI()
-                }
-                autoTuneInterpreter = Interpreter(autoTuneModel, options)
-                hasAutoTuneModel = true
-            }
-            
-            val musicGenModel = loadModelFile("musicgen_model.tflite")
-            if (musicGenModel != null) {
-                val options = Interpreter.Options().apply {
-                    setNumThreads(4)
-                    useNNAPI()
-                }
-                musicGenInterpreter = Interpreter(musicGenModel, options)
-                hasMusicGenModel = true
-            }
-            
-            if (hasAutoTuneModel || hasMusicGenModel) {
-                tvStatus.text = "AI Models loaded! Professional mode ready."
-            } else {
-                tvStatus.text = "Using DSP engine. Ready to record!"
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            tvStatus.text = "Using DSP engine. Ready to record!"
-        }
-    }
-    
-    private fun loadModelFile(filename: String): MappedByteBuffer? {
-        return try {
-            val fileDescriptor: AssetFileDescriptor = assets.openFd(filename)
-            val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
-            val fileChannel = inputStream.channel
-            val startOffset = fileDescriptor.startOffset
-            val declaredLength = fileDescriptor.declaredLength
-            fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
-        } catch (e: Exception) {
-            null
-        }
     }
 
     private fun checkPermissions() {
@@ -194,11 +137,7 @@ class MainActivity : AppCompatActivity() {
         isRecording = false
         btnRecord.isEnabled = false
         btnStop.isEnabled = false
-        tvStatus.text = if (hasAutoTuneModel || hasMusicGenModel) {
-            "Processing with AI (fast)..."
-        } else {
-            "Processing with DSP..."
-        }
+        tvStatus.text = "Processing: Professional Studio Mix..."
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 10
 
@@ -216,20 +155,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 runOnUiThread { progressBar.progress = 20 }
-                
-                val processedVocal = if (hasAutoTuneModel && autoTuneInterpreter != null) {
-                    applyAIAutoTune(pcmData)
-                } else {
-                    applyProfessionalVocalProcessing(pcmData)
-                }
+                val processedVocal = applyProfessionalVocalProcessing(pcmData)
                 
                 runOnUiThread { progressBar.progress = 50 }
-                
-                val backingTrack = if (hasMusicGenModel && musicGenInterpreter != null) {
-                    generateAIMusicTrack(pcmData)
-                } else {
-                    generateProfessionalGuitarTrack(pcmData, 44100)
-                }
+                val backingTrack = generateProfessionalGuitarTrack(pcmData, 44100)
                 
                 runOnUiThread { progressBar.progress = 75 }
                 val finalMix = mixTracksProfessional(processedVocal, backingTrack)
@@ -247,12 +176,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Done! Saved to Music/Singing folder."
-                    val msg = if (hasAutoTuneModel || hasMusicGenModel) {
-                        "AI-powered mix saved!"
-                    } else {
-                        "DSP mix saved!"
-                    }
-                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Professional studio mix saved!", Toast.LENGTH_LONG).show()
                     btnRecord.isEnabled = true
                 }
             } catch (e: Exception) {
@@ -264,61 +188,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
-    }
-    
-    private fun applyAIAutoTune(input: ShortArray): ShortArray {
-        return try {
-            val inputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
-            val floatBuffer = inputBuffer.asFloatBuffer()
-            for (sample in input) {
-                floatBuffer.put(sample.toFloat() / Short.MAX_VALUE)
-            }
-            inputBuffer.rewind()
-            
-            val outputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
-            autoTuneInterpreter?.run(inputBuffer, outputBuffer)
-            
-            outputBuffer.rewind()
-            val outputFloat = outputBuffer.asFloatBuffer()
-            val result = ShortArray(input.size)
-            for (i in result.indices) {
-                val sample = outputFloat.get(i)
-                result[i] = (sample * Short.MAX_VALUE).toInt().toShort()
-            }
-            result
-        } catch (e: Exception) {
-            applyProfessionalVocalProcessing(input)
-        }
-    }
-    
-    private fun generateAIMusicTrack(input: ShortArray): ShortArray {
-        return try {
-            val inputBuffer = ByteBuffer.allocateDirect(4096 * 4).order(ByteOrder.nativeOrder())
-            val floatBuffer = inputBuffer.asFloatBuffer()
-            
-            val blockSize = min(4096, input.size)
-            for (i in 0 until blockSize) {
-                floatBuffer.put(input[i].toFloat() / Short.MAX_VALUE)
-            }
-            while (floatBuffer.hasRemaining()) {
-                floatBuffer.put(0f)
-            }
-            inputBuffer.rewind()
-            
-            val outputBuffer = ByteBuffer.allocateDirect(input.size * 4).order(ByteOrder.nativeOrder())
-            musicGenInterpreter?.run(inputBuffer, outputBuffer)
-            
-            outputBuffer.rewind()
-            val outputFloat = outputBuffer.asFloatBuffer()
-            val result = ShortArray(input.size)
-            for (i in result.indices) {
-                val sample = outputFloat.get(i)
-                result[i] = (sample * Short.MAX_VALUE).toInt().toShort()
-            }
-            result
-        } catch (e: Exception) {
-            generateProfessionalGuitarTrack(input, 44100)
-        }
     }
 
     private fun applyProfessionalVocalProcessing(input: ShortArray): ShortArray {
@@ -459,15 +328,16 @@ class MainActivity : AppCompatActivity() {
                 var envelope = if (t < attack) {
                     t / attack
                 } else {
-                    exp(-2.5f * (t - attack) / decay).toFloat()
+                    exp((-2.5 * (t - attack) / decay).toDouble()).toFloat()
                 }
                 
                 var guitarSample = 0f
                 for (j in freqs.indices) {
-                    val fundamental = sin(phases[j])
-                    val harmonic2 = 0.4f * sin(2.0 * phases[j])
-                    val harmonic3 = 0.2f * sin(3.0 * phases[j])
-                    val harmonic4 = 0.1f * sin(4.0 * phases[j])
+                    val phase = phases[j].toDouble()
+                    val fundamental = sin(phase).toFloat()
+                    val harmonic2 = (0.4f * sin(2.0 * phase)).toFloat()
+                    val harmonic3 = (0.2f * sin(3.0 * phase)).toFloat()
+                    val harmonic4 = (0.1f * sin(4.0 * phase)).toFloat()
                     
                     guitarSample += (fundamental + harmonic2 + harmonic3 + harmonic4) * (1.0f / freqs.size)
                     
@@ -586,7 +456,5 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         isRecording = false
         audioRecord?.release()
-        autoTuneInterpreter?.close()
-        musicGenInterpreter?.close()
     }
 }
