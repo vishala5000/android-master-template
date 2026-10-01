@@ -1,5 +1,4 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Using hardcoded hex colors to prevent missing resource errors if colors.xml is absent -->
     <style name="Theme.VD" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">#1976D2</item>
         <item name="colorPrimaryVariant">#004BA0</item>
