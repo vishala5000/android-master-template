@@ -96,27 +96,26 @@ class MainActivity : AppCompatActivity() {
                 val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
                 val usedIndices = prefs.getStringSet("used", emptySet())?.map { it.toInt() }?.toMutableSet() ?: mutableSetOf()
                 val available = (0 until lines.size).filter { !usedIndices.contains(it) }.toMutableList()
-
-                if (available.isEmpty()) {
-                    usedIndices.clear()
-                    prefs.edit().putStringSet("used", emptySet()).apply()
-                    available.addAll(0 until lines.size)
-                    runOnUiThread { tvLog.append("All unique generations exhausted. Resetting for endless use.\n") }
-                }
-
-                val actualCount = minOf(requestedCount, available.size)
-                runOnUiThread { updateStatus("Generating $actualCount videos...") }
-
                 val random = java.util.Random()
-                for (i in 1..actualCount) {
-                    if (available.isEmpty()) break
-                    val selectedIndex = available[random.nextInt(available.size)]
-                    available.remove(selectedIndex)
+                var generatedCount = 0
+
+                runOnUiThread { updateStatus("Generating $requestedCount videos...") }
+
+                // Loop ensures we generate exactly the requested amount, endlessly
+                while (generatedCount < requestedCount) {
+                    if (available.isEmpty()) {
+                        usedIndices.clear()
+                        prefs.edit().putStringSet("used", emptySet()).apply()
+                        available.addAll(0 until lines.size)
+                        runOnUiThread { tvLog.append("♻️ All unique lines used. Resetting pool for endless generation...\n") }
+                    }
+
+                    val selectedIndex = available.removeAt(random.nextInt(available.size))
                     usedIndices.add(selectedIndex)
                     prefs.edit().putStringSet("used", usedIndices.map { it.toString() }.toSet()).apply()
 
                     val targetText = lines[selectedIndex]
-                    runOnUiThread { updateStatus("Generating video $i/$actualCount...") }
+                    runOnUiThread { updateStatus("Generating video ${generatedCount + 1}/$requestedCount...") }
 
                     val shuffleTexts = mutableListOf<String>()
                     for (j in 1..3) {
@@ -136,22 +135,29 @@ class MainActivity : AppCompatActivity() {
                         val mp4File = File(cacheDir, "clip$j.mp4")
                         mp4Paths.add(mp4File.absolutePath)
                         
-                        val cmd = "-y -loop 1 -i ${pngFile.absolutePath} -c:v libx264 -t ${durations[j]} -r 30 -pix_fmt yuv420p -vf scale=1080:1920 ${mp4File.absolutePath}"
+                        // Single quotes around paths prevent FFmpeg crashes on paths with spaces
+                        val safePngPath = "'${pngFile.absolutePath}'"
+                        val safeMp4Path = "'${mp4File.absolutePath}'"
+                        val cmd = "-y -loop 1 -i $safePngPath -c:v libx264 -t ${durations[j]} -r 30 -pix_fmt yuv420p -vf scale=1080:1920 $safeMp4Path"
                         FFmpegKit.execute(cmd)
                     }
 
                     val concatFile = File(cacheDir, "concat.txt")
                     concatFile.writeText(mp4Paths.joinToString("\n") { "file '$it'" })
 
-                    val finalVideoName = "vidgene_${System.currentTimeMillis()}_$i.mp4"
-                    val finalVideoFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), finalVideoName)
+                    val finalVideoName = "vidgene_${System.currentTimeMillis()}_$generatedCount.mp4"
+                    val moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: cacheDir
+                    val finalVideoFile = File(moviesDir, finalVideoName)
 
-                    val concatCmd = "-y -f concat -safe 0 -i ${concatFile.absolutePath} -c copy ${finalVideoFile.absolutePath}"
+                    val safeConcatPath = "'${concatFile.absolutePath}'"
+                    val safeFinalPath = "'${finalVideoFile.absolutePath}'"
+                    val concatCmd = "-y -f concat -safe 0 -i $safeConcatPath -c copy $safeFinalPath"
                     FFmpegKit.execute(concatCmd)
 
                     runOnUiThread {
                         tvLog.append("✅ Generated: $finalVideoName\n")
                     }
+                    generatedCount++
                 }
                 runOnUiThread { updateStatus("Generation complete! Check app Movies folder.") }
             } catch (e: Exception) {
@@ -166,6 +172,7 @@ class MainActivity : AppCompatActivity() {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
+        // Dark background, slightly lighter for shuffle, pure black for reveal
         canvas.drawColor(if (isReveal) Color.BLACK else Color.parseColor("#1a1a1a"))
 
         val cardWidth = 900f
@@ -193,9 +200,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val staticLayout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, (cardWidth - 100).toInt())
+        // Perfect text wrap using StaticLayout
+        val staticLayout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, (cardWidth - 120).toInt())
             .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setMaxLines(12)
+            .setMaxLines(15)
             .setIncludePad(false)
             .build()
 
