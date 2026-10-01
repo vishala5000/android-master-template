@@ -30,6 +30,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etSearch: EditText
     private lateinit var btnSearch: ImageButton
     private lateinit var fabDownload: FloatingActionButton
+    
+    // Holds the URL sniffed from network requests across the full web
+    private var sniffedVideoUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,24 +78,48 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
             allowFileAccess = true
             mediaPlaybackRequiresUserGesture = false
-            // Set a standard mobile user agent to prevent sites from blocking the WebView
+            setSupportMultipleWindows(false) // Keeps navigation contained in this single WebView
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
         }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false // Let the WebView handle all navigation
+                return false // Allow full web navigation
+            }
+
+            // ADVANCED NETWORK SNIFFER: Intercepts all web traffic to find video files
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+                
+                // Check for direct video file extensions
+                val isVideoFile = url.endsWith(".mp4", ignoreCase = true) || 
+                                  url.endsWith(".webm", ignoreCase = true) || 
+                                  url.endsWith(".mkv", ignoreCase = true) ||
+                                  url.endsWith(".mov", ignoreCase = true)
+
+                // Check MIME type for video
+                val mimeType = MimeTypeMap.getFileExtensionFromUrl(url)?.let {
+                    MimeTypeMap.getSingleton().getMimeTypeFromExtension(it)
+                }
+                val isVideoMime = mimeType != null && mimeType.startsWith("video/")
+
+                if (isVideoFile || isVideoMime) {
+                    // Filter out tiny tracking pixels or blob URLs
+                    if (!url.startsWith("blob:") && !url.contains("pixel") && !url.contains("tracking") && url.length > 50) {
+                        sniffedVideoUrl = url
+                    }
+                }
+                return super.shouldInterceptRequest(view, request)
             }
         }
 
         webView.webChromeClient = object : WebChromeClient() {
-            // Handles fullscreen video playback
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 super.onShowCustomView(view, callback)
             }
         }
 
-        // Intercepts direct media download links
+        // Standard download listener for direct links
         webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
             val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
             downloadFile(url, filename)
@@ -110,28 +137,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         fabDownload.setOnClickListener {
-            // Inject JavaScript to find the currently loaded video URL
-            val js = """
-                (function() {
-                    var videos = document.querySelectorAll('video');
-                    for (var i = 0; i < videos.length; i++) {
-                        if (videos[i].src && videos[i].src.startsWith('http')) return videos[i].src;
-                        var sources = videos[i].querySelectorAll('source');
-                        for (var j = 0; j < sources.length; j++) {
-                            if (sources[j].src && sources[j].src.startsWith('http')) return sources[j].src;
+            // 1. Try to use the URL sniffed from the network traffic
+            val urlToDownload = sniffedVideoUrl
+            
+            if (urlToDownload != null && urlToDownload.isNotEmpty()) {
+                val filename = "vd_video_${System.currentTimeMillis()}.mp4"
+                downloadFile(urlToDownload, filename)
+                sniffedVideoUrl = null // Reset after use
+            } else {
+                // 2. Fallback: Inject JavaScript to find <video> tags in the DOM
+                val js = """
+                    (function() {
+                        var videos = document.querySelectorAll('video');
+                        for (var i = 0; i < videos.length; i++) {
+                            if (videos[i].src && videos[i].src.startsWith('http')) return videos[i].src;
+                            var sources = videos[i].querySelectorAll('source');
+                            for (var j = 0; j < sources.length; j++) {
+                                if (sources[j].src && sources[j].src.startsWith('http')) return sources[j].src;
+                            }
                         }
-                    }
-                    return '';
-                })();
-            """.trimIndent()
+                        return '';
+                    })();
+                """.trimIndent()
 
-            webView.evaluateJavascript(js) { result ->
-                val videoUrl = result?.replace("\"", "")?.trim()
-                if (videoUrl != null && videoUrl.isNotEmpty() && videoUrl != "null" && videoUrl != "''") {
-                    val filename = "vd_video_${System.currentTimeMillis()}.mp4"
-                    downloadFile(videoUrl, filename)
-                } else {
-                    Toast.makeText(this, "No video found on this page. Try clicking a direct video link.", Toast.LENGTH_LONG).show()
+                webView.evaluateJavascript(js) { result ->
+                    val videoUrl = result?.replace("\"", "")?.trim()
+                    if (videoUrl != null && videoUrl.isNotEmpty() && videoUrl != "null" && videoUrl != "''") {
+                        val filename = "vd_video_${System.currentTimeMillis()}.mp4"
+                        downloadFile(videoUrl, filename)
+                    } else {
+                        Toast.makeText(this, "No video detected. Play the video first or try a different site.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
@@ -144,25 +180,23 @@ class MainActivity : AppCompatActivity() {
         val url = if (query.startsWith("http://") || query.startsWith("https://")) {
             query
         } else {
-            // Appends "1080p full length video" to force high-quality full-length search results
             val searchQuery = URLEncoder.encode("$query 1080p full length video", "UTF-8")
             "https://www.google.com/search?q=$searchQuery"
         }
         
+        // Reset sniffer when loading a new page
+        sniffedVideoUrl = null 
         webView.loadUrl(url)
         etSearch.setText("")
         hideKeyboard()
     }
 
     private fun downloadFile(fileUrl: String, rawFilename: String) {
-        // Sanitize filename to prevent crashes
         val filename = rawFilename.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
-        
         Toast.makeText(this, "Starting download: $filename", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
-                // Creates /storage/emulated/0/vidz/
                 val vidzDir = File(Environment.getExternalStorageDirectory(), "vidz")
                 if (!vidzDir.exists()) vidzDir.mkdirs()
                 
@@ -185,7 +219,7 @@ class MainActivity : AppCompatActivity() {
                 connection.disconnect()
 
                 runOnUiThread {
-                    Toast.makeText(this, "Saved to internal storage /vidz/$filename", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Saved to /vidz/$filename", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
