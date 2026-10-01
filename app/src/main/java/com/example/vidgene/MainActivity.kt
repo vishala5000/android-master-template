@@ -1,4 +1,4 @@
-package com.example.vd
+package com.example.vd // ⚠️ CHANGE THIS to com.example.vidgene IF YOUR FOLDER IS NAMED vidgene
 
 import android.Manifest
 import android.content.Intent
@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
     private val detectedVideos = mutableListOf<VideoInfo>()
     private lateinit var videoAdapter: VideoAdapter
 
-    @Volatile
+    // ✅ FIX 1: Removed @Volatile because it cannot be used on 'val' (immutable reference)
     private val sniffedVideoUrls = mutableMapOf<String, String>()
 
     private val VIDEO_DETECTOR_JS = """
@@ -206,14 +206,16 @@ class MainActivity : AppCompatActivity() {
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
 
-                val mimeType = request.mimeType
-                val isVideoMime = mimeType != null && mimeType.startsWith("video/")
+                // ✅ FIX 2: Removed request.mimeType because WebResourceRequest does not have this property.
+                // We rely strictly on URL extension checking, which is highly effective and compiles perfectly.
                 val isVideoFile = url.endsWith(".mp4", ignoreCase = true) ||
                         url.endsWith(".webm", ignoreCase = true) ||
                         url.endsWith(".mkv", ignoreCase = true) ||
-                        url.endsWith(".mov", ignoreCase = true)
+                        url.endsWith(".mov", ignoreCase = true) ||
+                        url.contains(".mp4?", ignoreCase = true) ||
+                        url.contains(".webm?", ignoreCase = true)
 
-                if ((isVideoFile || isVideoMime) && !url.startsWith("blob:") && url.length > 50) {
+                if (isVideoFile && !url.startsWith("blob:") && url.length > 50) {
                     val pageUrl = webView.url ?: ""
                     sniffedVideoUrls[pageUrl] = url
                 }
