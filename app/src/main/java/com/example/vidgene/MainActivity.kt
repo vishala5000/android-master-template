@@ -31,7 +31,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSearch: ImageButton
     private lateinit var fabDownload: FloatingActionButton
     
-    // Holds the URL sniffed from network requests across the full web
     private var sniffedVideoUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,33 +77,30 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
             allowFileAccess = true
             mediaPlaybackRequiresUserGesture = false
-            setSupportMultipleWindows(false) // Keeps navigation contained in this single WebView
+            setSupportMultipleWindows(false)
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
         }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false // Allow full web navigation
+                return false 
             }
 
-            // ADVANCED NETWORK SNIFFER: Intercepts all web traffic to find video files
+            // ADVANCED NETWORK SNIFFER
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
                 
-                // Check for direct video file extensions
+                // Use direct MIME type from request for high accuracy
+                val mimeType = request.mimeType
+                val isVideoMime = mimeType != null && mimeType.startsWith("video/")
+                
                 val isVideoFile = url.endsWith(".mp4", ignoreCase = true) || 
                                   url.endsWith(".webm", ignoreCase = true) || 
                                   url.endsWith(".mkv", ignoreCase = true) ||
                                   url.endsWith(".mov", ignoreCase = true)
 
-                // Check MIME type for video
-                val mimeType = MimeTypeMap.getFileExtensionFromUrl(url)?.let {
-                    MimeTypeMap.getSingleton().getMimeTypeFromExtension(it)
-                }
-                val isVideoMime = mimeType != null && mimeType.startsWith("video/")
-
                 if (isVideoFile || isVideoMime) {
-                    // Filter out tiny tracking pixels or blob URLs
+                    // Filter out tracking pixels, tiny assets, and blob URLs
                     if (!url.startsWith("blob:") && !url.contains("pixel") && !url.contains("tracking") && url.length > 50) {
                         sniffedVideoUrl = url
                     }
@@ -119,7 +115,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Standard download listener for direct links
         webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
             val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
             downloadFile(url, filename)
@@ -137,19 +132,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         fabDownload.setOnClickListener {
-            // 1. Try to use the URL sniffed from the network traffic
             val urlToDownload = sniffedVideoUrl
             
             if (urlToDownload != null && urlToDownload.isNotEmpty()) {
                 val filename = "vd_video_${System.currentTimeMillis()}.mp4"
                 downloadFile(urlToDownload, filename)
-                sniffedVideoUrl = null // Reset after use
+                sniffedVideoUrl = null 
             } else {
-                // 2. Fallback: Inject JavaScript to find <video> tags in the DOM
                 val js = """
                     (function() {
                         var videos = document.querySelectorAll('video');
-                        for (var i = 0; i < videos.length; i++) {
+                        for (var i = 0; i < videos.length.length; i++) {
                             if (videos[i].src && videos[i].src.startsWith('http')) return videos[i].src;
                             var sources = videos[i].querySelectorAll('source');
                             for (var j = 0; j < sources.length; j++) {
@@ -184,7 +177,6 @@ class MainActivity : AppCompatActivity() {
             "https://www.google.com/search?q=$searchQuery"
         }
         
-        // Reset sniffer when loading a new page
         sniffedVideoUrl = null 
         webView.loadUrl(url)
         etSearch.setText("")
@@ -203,6 +195,14 @@ class MainActivity : AppCompatActivity() {
                 val outFile = File(vidzDir, filename)
                 val url = URL(fileUrl)
                 val connection = url.openConnection() as HttpURLConnection
+                
+                // CRITICAL: Pass WebView cookies and User-Agent to bypass site restrictions
+                connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
+                val cookie = CookieManager.getInstance().getCookie(fileUrl)
+                if (cookie != null) {
+                    connection.setRequestProperty("Cookie", cookie)
+                }
+                
                 connection.connect()
 
                 val inputStream = connection.inputStream
