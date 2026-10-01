@@ -1,56 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="24dp"
-    android:gravity="center_horizontal"
-    android:background="?android:attr/windowBackground">
+    android:gravity="center_horizontal">
 
     <TextView
         android:id="@+id/tvStatus"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ready to record your singing!"
-        android:textSize="20sp"
+        android:text="@string/status_ready"
+        android:textSize="18sp"
         android:textStyle="bold"
-        android:textAlignment="center"
-        android:textColor="?android:attr/textColorPrimary"
-        android:layout_marginTop="48dp"
-        android:padding="16dp" />
+        android:gravity="center"
+        android:layout_marginBottom="24dp" />
 
     <Button
-        android:id="@+id/btnRecord"
+        android:id="@+id/btnDownload"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:layout_marginTop="48dp"
-        android:text="🎤 Start Recording"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        android:backgroundTint="@color/design_default_color_primary"
-        android:textColor="@android:color/white" />
+        android:layout_height="wrap_content"
+        android:text="@string/btn_download"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/etCount"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/hint_count"
+        android:inputType="number"
+        android:text="1"
+        android:layout_marginBottom="16dp" />
 
     <Button
-        android:id="@+id/btnStop"
+        android:id="@+id/btnGenerate"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_generate" />
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:layout_marginTop="16dp"
-        android:text="⏹ Stop &amp; Process"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        android:enabled="false"
-        android:backgroundTint="@color/design_default_color_secondary"
-        android:textColor="@android:color/white" />
+        android:background="#F5F5F5"
+        android:padding="12dp">
 
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
-        android:visibility="gone"
-        android:indeterminate="false"
-        android:max="100" />
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:fontFamily="monospace"
+            android:textColor="#333333" />
+    </androidx.core.widget.NestedScrollView>
 
 </LinearLayout>
