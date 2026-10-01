@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import android.view.KeyEvent
-import android.view.View
 import android.webkit.*
 import android.widget.EditText
 import android.widget.ImageButton
@@ -31,6 +30,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSearch: ImageButton
     private lateinit var fabDownload: FloatingActionButton
     
+    // @Volatile ensures thread-safety between the background sniffer and main UI thread
+    @Volatile
     private var sniffedVideoUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,7 +91,6 @@ class MainActivity : AppCompatActivity() {
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
                 
-                // Use direct MIME type from request for high accuracy
                 val mimeType = request.mimeType
                 val isVideoMime = mimeType != null && mimeType.startsWith("video/")
                 
@@ -109,11 +109,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
-                super.onShowCustomView(view, callback)
-            }
-        }
+        webView.webChromeClient = WebChromeClient()
 
         webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
             val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
@@ -139,10 +135,11 @@ class MainActivity : AppCompatActivity() {
                 downloadFile(urlToDownload, filename)
                 sniffedVideoUrl = null 
             } else {
+                // FIXED: Corrected the JavaScript loop syntax (videos.length.length -> videos.length)
                 val js = """
                     (function() {
                         var videos = document.querySelectorAll('video');
-                        for (var i = 0; i < videos.length.length; i++) {
+                        for (var i = 0; i < videos.length; i++) {
                             if (videos[i].src && videos[i].src.startsWith('http')) return videos[i].src;
                             var sources = videos[i].querySelectorAll('source');
                             for (var j = 0; j < sources.length; j++) {
@@ -196,7 +193,7 @@ class MainActivity : AppCompatActivity() {
                 val url = URL(fileUrl)
                 val connection = url.openConnection() as HttpURLConnection
                 
-                // CRITICAL: Pass WebView cookies and User-Agent to bypass site restrictions
+                // Pass WebView cookies and User-Agent to bypass site restrictions
                 connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
                 val cookie = CookieManager.getInstance().getCookie(fileUrl)
                 if (cookie != null) {
@@ -235,6 +232,7 @@ class MainActivity : AppCompatActivity() {
         imm.hideSoftInputFromWindow(webView.windowToken, 0)
     }
 
+    @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (webView.canGoBack()) {
             webView.goBack()
