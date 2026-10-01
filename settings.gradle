@@ -6,11 +6,12 @@ pluginManagement {
     }
 }
 dependencyResolutionManagement {
+    // CRITICAL: Using PREFER_SETTINGS to prevent conflicts with root build.gradle
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
     }
 }
-rootProject.name = "Vid Gene"
-include(":app")
+rootProject.name = "VD"
+include ':app'
