@@ -13,6 +13,7 @@ import android.webkit.*
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -30,7 +31,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSearch: ImageButton
     private lateinit var fabDownload: FloatingActionButton
     
-    // @Volatile ensures thread-safety between the background sniffer and main UI thread
     @Volatile
     private var sniffedVideoUrl: String? = null
 
@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
         checkPermissions()
         setupWebView()
         setupListeners()
+        setupBackPressHandler()
     }
 
     private fun initViews() {
@@ -71,6 +72,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 101) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Storage permission granted", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Storage permission denied - downloads may fail", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun setupWebView() {
         webView.settings.apply {
             javaScriptEnabled = true
@@ -87,7 +99,6 @@ class MainActivity : AppCompatActivity() {
                 return false 
             }
 
-            // ADVANCED NETWORK SNIFFER
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
                 
@@ -100,7 +111,6 @@ class MainActivity : AppCompatActivity() {
                                   url.endsWith(".mov", ignoreCase = true)
 
                 if (isVideoFile || isVideoMime) {
-                    // Filter out tracking pixels, tiny assets, and blob URLs
                     if (!url.startsWith("blob:") && !url.contains("pixel") && !url.contains("tracking") && url.length > 50) {
                         sniffedVideoUrl = url
                     }
@@ -135,7 +145,6 @@ class MainActivity : AppCompatActivity() {
                 downloadFile(urlToDownload, filename)
                 sniffedVideoUrl = null 
             } else {
-                // FIXED: Corrected the JavaScript loop syntax (videos.length.length -> videos.length)
                 val js = """
                     (function() {
                         var videos = document.querySelectorAll('video');
@@ -163,6 +172,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupBackPressHandler() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+    }
+
     private fun performSearch() {
         val query = etSearch.text.toString().trim()
         if (query.isEmpty()) return
@@ -182,18 +204,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun downloadFile(fileUrl: String, rawFilename: String) {
         val filename = rawFilename.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
+        
+        // Validate download directory
+        val vidzDir = File(Environment.getExternalStorageDirectory(), "vidz")
+        if (!vidzDir.exists() && !vidzDir.mkdirs()) {
+            Toast.makeText(this, "Cannot create download folder", Toast.LENGTH_LONG).show()
+            return
+        }
+        
         Toast.makeText(this, "Starting download: $filename", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
-                val vidzDir = File(Environment.getExternalStorageDirectory(), "vidz")
-                if (!vidzDir.exists()) vidzDir.mkdirs()
-                
                 val outFile = File(vidzDir, filename)
                 val url = URL(fileUrl)
                 val connection = url.openConnection() as HttpURLConnection
                 
-                // Pass WebView cookies and User-Agent to bypass site restrictions
                 connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
                 val cookie = CookieManager.getInstance().getCookie(fileUrl)
                 if (cookie != null) {
@@ -202,21 +228,32 @@ class MainActivity : AppCompatActivity() {
                 
                 connection.connect()
 
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    throw Exception("Server returned ${connection.responseCode}")
+                }
+
                 val inputStream = connection.inputStream
                 val outputStream = FileOutputStream(outFile)
 
-                val data = ByteArray(1024)
+                val data = ByteArray(8192)
                 var count: Int
+                var totalBytes = 0L
                 while (inputStream.read(data).also { count = it } != -1) {
                     outputStream.write(data, 0, count)
+                    totalBytes += count
                 }
                 
                 outputStream.close()
                 inputStream.close()
                 connection.disconnect()
 
+                if (totalBytes < 1000) {
+                    outFile.delete()
+                    throw Exception("File too small - likely not a video")
+                }
+
                 runOnUiThread {
-                    Toast.makeText(this, "Saved to /vidz/$filename", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "✓ Saved to /vidz/$filename (${totalBytes / 1024 / 1024}MB)", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -230,14 +267,5 @@ class MainActivity : AppCompatActivity() {
     private fun hideKeyboard() {
         val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         imm.hideSoftInputFromWindow(webView.windowToken, 0)
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
-        }
     }
 }
