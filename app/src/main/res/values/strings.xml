@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">Vid Gene</string>
-    <string name="btn_download">Download Assets (data.txt & font.ttf)</string>
+    <string name="btn_download">Download Assets (data.txt &amp; font.ttf)</string>
     <string name="btn_generate">Generate Videos</string>
     <string name="hint_count">How many videos? (1 to unlimited)</string>
     <string name="status_ready">Ready. Download assets first, then generate.</string>
