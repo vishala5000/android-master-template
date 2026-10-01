@@ -1,220 +1,211 @@
-package com.example.vidgene
+package com.example.vd
 
-import android.graphics.*
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
-import android.widget.Button
+import android.provider.Settings
+import android.view.KeyEvent
+import android.view.View
+import android.webkit.*
 import android.widget.EditText
-import android.widget.TextView
+import android.widget.ImageButton
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.arthenica.ffmpegkit.FFmpegKit
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var tvStatus: TextView
-    private lateinit var tvLog: TextView
-    private lateinit var etCount: EditText
-    private val prefsName = "VidGenePrefs"
+    private lateinit var webView: WebView
+    private lateinit var etSearch: EditText
+    private lateinit var btnSearch: ImageButton
+    private lateinit var fabDownload: FloatingActionButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        tvStatus = findViewById(R.id.tvStatus)
-        tvLog = findViewById(R.id.tvLog)
-        etCount = findViewById(R.id.etCount)
+        initViews()
+        checkPermissions()
+        setupWebView()
+        setupListeners()
+    }
 
-        findViewById<Button>(R.id.btnDownload).setOnClickListener {
-            downloadAssets()
-        }
+    private fun initViews() {
+        webView = findViewById(R.id.webView)
+        etSearch = findViewById(R.id.etSearch)
+        btnSearch = findViewById(R.id.btnSearch)
+        fabDownload = findViewById(R.id.fabDownload)
+    }
 
-        findViewById<Button>(R.id.btnGenerate).setOnClickListener {
-            startGeneration()
+    private fun checkPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                Toast.makeText(this, "Allow 'All Files Access' to save videos to /vidz folder", Toast.LENGTH_LONG).show()
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+            }
         }
     }
 
-    private fun updateStatus(msg: String) {
-        tvStatus.text = msg
+    private fun setupWebView() {
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowContentAccess = true
+            allowFileAccess = true
+            mediaPlaybackRequiresUserGesture = false
+            // Set a standard mobile user agent to prevent sites from blocking the WebView
+            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
+        }
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                return false // Let the WebView handle all navigation
+            }
+        }
+
+        webView.webChromeClient = object : WebChromeClient() {
+            // Handles fullscreen video playback
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                super.onShowCustomView(view, callback)
+            }
+        }
+
+        // Intercepts direct media download links
+        webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
+            val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
+            downloadFile(url, filename)
+        }
     }
 
-    private fun downloadAssets() {
-        updateStatus("Downloading assets...")
+    private fun setupListeners() {
+        btnSearch.setOnClickListener { performSearch() }
+        
+        etSearch.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
+                performSearch()
+                true
+            } else false
+        }
+
+        fabDownload.setOnClickListener {
+            // Inject JavaScript to find the currently loaded video URL
+            val js = """
+                (function() {
+                    var videos = document.querySelectorAll('video');
+                    for (var i = 0; i < videos.length; i++) {
+                        if (videos[i].src && videos[i].src.startsWith('http')) return videos[i].src;
+                        var sources = videos[i].querySelectorAll('source');
+                        for (var j = 0; j < sources.length; j++) {
+                            if (sources[j].src && sources[j].src.startsWith('http')) return sources[j].src;
+                        }
+                    }
+                    return '';
+                })();
+            """.trimIndent()
+
+            webView.evaluateJavascript(js) { result ->
+                val videoUrl = result?.replace("\"", "")?.trim()
+                if (videoUrl != null && videoUrl.isNotEmpty() && videoUrl != "null" && videoUrl != "''") {
+                    val filename = "vd_video_${System.currentTimeMillis()}.mp4"
+                    downloadFile(videoUrl, filename)
+                } else {
+                    Toast.makeText(this, "No video found on this page. Try clicking a direct video link.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun performSearch() {
+        val query = etSearch.text.toString().trim()
+        if (query.isEmpty()) return
+
+        val url = if (query.startsWith("http://") || query.startsWith("https://")) {
+            query
+        } else {
+            // Appends "1080p full length video" to force high-quality full-length search results
+            val searchQuery = URLEncoder.encode("$query 1080p full length video", "UTF-8")
+            "https://www.google.com/search?q=$searchQuery"
+        }
+        
+        webView.loadUrl(url)
+        etSearch.setText("")
+        hideKeyboard()
+    }
+
+    private fun downloadFile(fileUrl: String, rawFilename: String) {
+        // Sanitize filename to prevent crashes
+        val filename = rawFilename.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
+        
+        Toast.makeText(this, "Starting download: $filename", Toast.LENGTH_SHORT).show()
+
         Thread {
             try {
-                downloadFile("data.txt", "https://github.com/vishala5000/android-master-template/releases/download/assets/data.txt")
-                downloadFile("font.ttf", "https://github.com/vishala5000/android-master-template/releases/download/assets/font.ttf")
-                runOnUiThread { 
-                    updateStatus("Assets downloaded successfully!") 
-                    Toast.makeText(this, "Assets ready", Toast.LENGTH_SHORT).show()
+                // Creates /storage/emulated/0/vidz/
+                val vidzDir = File(Environment.getExternalStorageDirectory(), "vidz")
+                if (!vidzDir.exists()) vidzDir.mkdirs()
+                
+                val outFile = File(vidzDir, filename)
+                val url = URL(fileUrl)
+                val connection = url.openConnection() as HttpURLConnection
+                connection.connect()
+
+                val inputStream = connection.inputStream
+                val outputStream = FileOutputStream(outFile)
+
+                val data = ByteArray(1024)
+                var count: Int
+                while (inputStream.read(data).also { count = it } != -1) {
+                    outputStream.write(data, 0, count)
+                }
+                
+                outputStream.close()
+                inputStream.close()
+                connection.disconnect()
+
+                runOnUiThread {
+                    Toast.makeText(this, "Saved to internal storage /vidz/$filename", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                runOnUiThread { 
-                    updateStatus("Download failed: ${e.message}") 
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
     }
 
-    private fun downloadFile(fileName: String, urlStr: String) {
-        val file = File(filesDir, fileName)
-        if (file.exists() && file.length() > 0) return
-        URL(urlStr).openStream().use { input ->
-            file.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
+    private fun hideKeyboard() {
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        imm.hideSoftInputFromWindow(webView.windowToken, 0)
     }
 
-    private fun startGeneration() {
-        val dataFile = File(filesDir, "data.txt")
-        if (!dataFile.exists()) {
-            Toast.makeText(this, "Please download assets first", Toast.LENGTH_SHORT).show()
-            return
+    override fun onBackPressed() {
+        if (webView.canGoBack()) {
+            webView.goBack()
+        } else {
+            super.onBackPressed()
         }
-
-        val requestedCount = etCount.text.toString().toIntOrNull() ?: 1
-        if (requestedCount < 1) {
-            Toast.makeText(this, "Enter a valid number (1 or more)", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        updateStatus("Preparing generation...")
-        Thread {
-            try {
-                val lines = dataFile.readLines().filter { it.isNotBlank() }
-                if (lines.isEmpty()) {
-                    runOnUiThread { updateStatus("Error: data.txt is empty") }
-                    return@Thread
-                }
-
-                val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-                val usedIndices = prefs.getStringSet("used", emptySet())?.map { it.toInt() }?.toMutableSet() ?: mutableSetOf()
-                val available = (0 until lines.size).filter { !usedIndices.contains(it) }.toMutableList()
-                val random = java.util.Random()
-                var generatedCount = 0
-
-                runOnUiThread { updateStatus("Generating $requestedCount videos...") }
-
-                // Loop ensures we generate exactly the requested amount, endlessly
-                while (generatedCount < requestedCount) {
-                    if (available.isEmpty()) {
-                        usedIndices.clear()
-                        prefs.edit().putStringSet("used", emptySet()).apply()
-                        available.addAll(0 until lines.size)
-                        runOnUiThread { tvLog.append("♻️ All unique lines used. Resetting pool for endless generation...\n") }
-                    }
-
-                    val selectedIndex = available.removeAt(random.nextInt(available.size))
-                    usedIndices.add(selectedIndex)
-                    prefs.edit().putStringSet("used", usedIndices.map { it.toString() }.toSet()).apply()
-
-                    val targetText = lines[selectedIndex]
-                    runOnUiThread { updateStatus("Generating video ${generatedCount + 1}/$requestedCount...") }
-
-                    val shuffleTexts = mutableListOf<String>()
-                    for (j in 1..3) {
-                        shuffleTexts.add(lines[random.nextInt(lines.size)])
-                    }
-
-                    val cacheDir = cacheDir
-                    val pngNames = listOf("s1.png", "s2.png", "s3.png", "reveal.png")
-                    val texts = shuffleTexts + targetText
-                    val durations = listOf("0.3", "0.3", "0.3", "3.0")
-                    val mp4Paths = mutableListOf<String>()
-
-                    for (j in 0..3) {
-                        val pngFile = File(cacheDir, pngNames[j])
-                        generateCard(texts[j], pngFile.absolutePath, isReveal = j == 3)
-                        
-                        val mp4File = File(cacheDir, "clip$j.mp4")
-                        mp4Paths.add(mp4File.absolutePath)
-                        
-                        // Single quotes around paths prevent FFmpeg crashes on paths with spaces
-                        val safePngPath = "'${pngFile.absolutePath}'"
-                        val safeMp4Path = "'${mp4File.absolutePath}'"
-                        val cmd = "-y -loop 1 -i $safePngPath -c:v libx264 -t ${durations[j]} -r 30 -pix_fmt yuv420p -vf scale=1080:1920 $safeMp4Path"
-                        FFmpegKit.execute(cmd)
-                    }
-
-                    val concatFile = File(cacheDir, "concat.txt")
-                    concatFile.writeText(mp4Paths.joinToString("\n") { "file '$it'" })
-
-                    val finalVideoName = "vidgene_${System.currentTimeMillis()}_$generatedCount.mp4"
-                    val moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: cacheDir
-                    val finalVideoFile = File(moviesDir, finalVideoName)
-
-                    val safeConcatPath = "'${concatFile.absolutePath}'"
-                    val safeFinalPath = "'${finalVideoFile.absolutePath}'"
-                    val concatCmd = "-y -f concat -safe 0 -i $safeConcatPath -c copy $safeFinalPath"
-                    FFmpegKit.execute(concatCmd)
-
-                    runOnUiThread {
-                        tvLog.append("✅ Generated: $finalVideoName\n")
-                    }
-                    generatedCount++
-                }
-                runOnUiThread { updateStatus("Generation complete! Check app Movies folder.") }
-            } catch (e: Exception) {
-                runOnUiThread { updateStatus("Error: ${e.message}") }
-            }
-        }.start()
-    }
-
-    private fun generateCard(text: String, filePath: String, isReveal: Boolean) {
-        val width = 1080
-        val height = 1920
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-
-        // Dark background, slightly lighter for shuffle, pure black for reveal
-        canvas.drawColor(if (isReveal) Color.BLACK else Color.parseColor("#1a1a1a"))
-
-        val cardWidth = 900f
-        val cardHeight = 900f
-        val cardLeft = (width - cardWidth) / 2f
-        val cardTop = (height - cardHeight) / 2f
-
-        val paint = Paint().apply {
-            color = Color.WHITE
-            style = Paint.Style.FILL
-        }
-        val rect = RectF(cardLeft, cardTop, cardLeft + cardWidth, cardTop + cardHeight)
-        canvas.drawRoundRect(rect, 40f, 40f, paint)
-
-        val textPaint = TextPaint().apply {
-            color = Color.BLACK
-            textSize = 64f
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-            try {
-                val typeface = Typeface.createFromFile(File(filesDir, "font.ttf"))
-                this.typeface = typeface
-            } catch (e: Exception) {
-                // Fallback to default font if font.ttf is missing/invalid
-            }
-        }
-
-        // Perfect text wrap using StaticLayout
-        val staticLayout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, (cardWidth - 120).toInt())
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setMaxLines(15)
-            .setIncludePad(false)
-            .build()
-
-        canvas.save()
-        canvas.translate(cardLeft + cardWidth / 2f, cardTop + cardHeight / 2f - staticLayout.height / 2f)
-        staticLayout.draw(canvas)
-        canvas.restore()
-
-        File(filePath).outputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        bitmap.recycle()
     }
 }
