@@ -22,7 +22,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Search 1080p videos..."
+            android:hint="Search or enter URL..."
             android:textColorHint="#B0B0B0"
             android:textColor="#FFFFFF"
             android:background="@android:color/transparent"
