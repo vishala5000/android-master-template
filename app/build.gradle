@@ -3,29 +3,12 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-// Auto-download the AAR if it's missing (fixes CI/CD environments where libs/ is not committed)
-def aarFile = file("libs/ffmpeg-kit-full-7.1.7-arm64-v8a-x86_64.aar")
-if (!aarFile.exists()) {
-    logger.warn("FFmpegKit AAR not found locally. Downloading from GitHub release...")
-    file("libs").mkdirs()
-    def aarUrl = "https://github.com/vishala5000/android-master-template/releases/download/assets/ffmpeg-kit-full-7.1.7-arm64-v8a-x86_64.aar"
-    try {
-        aarFile.withOutputStream { out ->
-            new URL(aarUrl).withInputStream { from -> out << from }
-        }
-        logger.warn("FFmpegKit AAR downloaded successfully.")
-    } catch (Exception e) {
-        logger.error("Failed to download FFmpegKit AAR: ${e.message}")
-        throw new GradleException("Failed to download FFmpegKit AAR. Please ensure the release asset exists.")
-    }
-}
-
 android {
-    namespace 'com.example.vidgene'
+    namespace 'com.example.vd'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.vidgene"
+        applicationId "com.example.vd"
         minSdk 24
         targetSdk 34
         versionCode 1
@@ -39,11 +22,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = '1.8'
     }
 }
 
@@ -52,5 +35,5 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation files('libs/ffmpeg-kit-full-7.1.7-arm64-v8a-x86_64.aar')
+    implementation 'androidx.webkit:webkit:1.10.0'
 }
