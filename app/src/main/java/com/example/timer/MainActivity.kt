@@ -145,16 +145,19 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.Default) {
             var pfd: ParcelFileDescriptor? = null
             try {
-                // Load background
-                var bgBitmap: Bitmap? = null
-                if (cbBackground.isChecked && selectedImageUri != null) {
+                // FIX: Use immutable 'val' to prevent smart-cast closure errors
+                val bgBitmap: Bitmap? = if (cbBackground.isChecked && selectedImageUri != null) {
+                    var tempBitmap: Bitmap? = null
                     contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
                         val original = BitmapFactory.decodeStream(input)
                         if (original != null) {
-                            bgBitmap = Bitmap.createScaledBitmap(original, WIDTH, HEIGHT, true)
-                            if (original !== bgBitmap) original.recycle()
+                            tempBitmap = Bitmap.createScaledBitmap(original, WIDTH, HEIGHT, true)
+                            if (original !== tempBitmap) original.recycle()
                         }
                     }
+                    tempBitmap
+                } else {
+                    null
                 }
 
                 // Create output file DIRECTLY in MediaStore (no temp file = maximum speed)
@@ -245,11 +248,14 @@ class MainActivity : AppCompatActivity() {
 
                     // Draw frame
                     val canvas = surface.lockCanvas(null)
+                    
+                    // Smart cast now works perfectly because bgBitmap is a 'val'
                     if (bgBitmap != null && !bgBitmap.isRecycled) {
                         canvas.drawBitmap(bgBitmap, null, Rect(0, 0, WIDTH, HEIGHT), null)
                     } else {
                         canvas.drawColor(Color.BLACK)
                     }
+                    
                     canvas.drawArc(ringRect, -90f, 360f, false, bgRingPaint)
                     canvas.drawArc(ringRect, -90f, (remaining.toFloat() / totalSeconds) * 360f, false, progressRingPaint)
                     canvas.drawText(timeStr, WIDTH / 2f, textY, textPaint)
