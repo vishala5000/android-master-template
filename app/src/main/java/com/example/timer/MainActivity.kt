@@ -39,6 +39,13 @@ import kotlin.math.sin
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val WIDTH = 1920
+        private const val HEIGHT = 1080
+        private const val FPS = 30
+        private const val BITRATE = 10_000_000 // 10 Mbps for perfect quality
+    }
+
     private lateinit var etHours: EditText
     private lateinit var etMinutes: EditText
     private lateinit var etSeconds: EditText
@@ -49,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
 
     private var selectedImageUri: Uri? = null
+    private var lastGeneratedUri: Uri? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -98,16 +106,22 @@ class MainActivity : AppCompatActivity() {
             val totalSeconds = (h * 3600) + (m * 60) + s
 
             if (totalSeconds <= 0) {
-                Toast.makeText(this, "Please enter a valid time greater than 0", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Enter at least 1 second", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
             if (cbBackground.isChecked && selectedImageUri == null) {
-                Toast.makeText(this, "Please pick a background image first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Pick background image first", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            startVideoGeneration(totalSeconds)
+            // Delete previous video
+            lastGeneratedUri?.let { uri ->
+                contentResolver.delete(uri, null, null)
+                lastGeneratedUri = null
+            }
+
+            startGeneration(totalSeconds)
         }
     }
 
@@ -122,231 +136,235 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startVideoGeneration(totalSeconds: Int) {
+    private fun startGeneration(totalSeconds: Int) {
         btnGenerate.isEnabled = false
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 0
-        tvStatus.text = "Preparing ultra-fast render..."
+        tvStatus.text = "Starting ultra-fast generation..."
 
         lifecycleScope.launch(Dispatchers.Default) {
             var pfd: ParcelFileDescriptor? = null
             try {
-                val frameRate = 30
-                val totalFrames = totalSeconds * frameRate
-                val hasBg = cbBackground.isChecked && selectedImageUri != null
-                
+                // Load background
                 var bgBitmap: Bitmap? = null
-                if (hasBg) {
-                    try {
-                        contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
-                            val original = BitmapFactory.decodeStream(input)
-                            if (original != null) {
-                                bgBitmap = Bitmap.createScaledBitmap(original, 1920, 1080, true)
-                                if (original != bgBitmap) original.recycle()
-                            }
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(this@MainActivity, "Failed to load image, using black background", Toast.LENGTH_LONG).show()
+                if (cbBackground.isChecked && selectedImageUri != null) {
+                    contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
+                        val original = BitmapFactory.decodeStream(input)
+                        if (original != null) {
+                            bgBitmap = Bitmap.createScaledBitmap(original, WIDTH, HEIGHT, true)
+                            if (original !== bgBitmap) original.recycle()
                         }
                     }
                 }
 
+                // Create output file DIRECTLY in MediaStore (no temp file = maximum speed)
                 val resolver = contentResolver
+                val fileName = "Timer_Countdown.mp4"
                 val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, "Timer_${System.currentTimeMillis()}.mp4")
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                     put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Timer")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Timer")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-                    ?: throw Exception("Failed to create MediaStore entry")
+                    ?: throw Exception("Failed to create file")
 
                 pfd = resolver.openFileDescriptor(uri, "rw")
-                    ?: throw Exception("Failed to open file descriptor")
+                    ?: throw Exception("Failed to open file")
 
                 val muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-                // UNIVERSAL CODEC - No explicit profile/level (lets device choose optimal)
+                // Video codec - maximum speed settings
                 val videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
-                videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, 8_000_000) // 8 Mbps - perfect quality, faster encoding
-                videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
-                videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2) // Faster encoding
-                
+                val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, WIDTH, HEIGHT).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    setInteger(MediaFormat.KEY_BIT_RATE, BITRATE)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
                 videoCodec.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 val surface = videoCodec.createInputSurface()
                 videoCodec.start()
 
+                // Audio codec
                 val audioCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
-                val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 1)
-                audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 128000)
-                audioFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+                val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 1).apply {
+                    setInteger(MediaFormat.KEY_BIT_RATE, 128000)
+                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 88200)
+                }
                 audioCodec.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 audioCodec.start()
 
-                var videoTrackIndex = -1
-                var audioTrackIndex = -1
+                var videoTrack = -1
+                var audioTrack = -1
                 var muxerStarted = false
 
-                val bufferInfo = MediaCodec.BufferInfo()
-                val audioBufferInfo = MediaCodec.BufferInfo()
+                val videoInfo = MediaCodec.BufferInfo()
+                val audioInfo = MediaCodec.BufferInfo()
 
-                val beepBytes = generatePerfectBeep(44100, 150, 880.0)
+                // Pre-generate 1 second of audio (150ms beep + 850ms silence)
+                val oneSecondAudio = generateOneSecondAudio(44100, 150, 880.0)
 
-                // ULTRA-FAST TEXT RENDERING using shadow layer instead of stroke
+                // Text rendering setup
                 val textPaint = Paint().apply {
                     color = Color.WHITE
                     textSize = 280f
                     textAlign = Paint.Align.CENTER
                     isAntiAlias = true
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                    // Shadow layer is 10x faster than stroke
-                    setShadowLayer(20f, 0f, 0f, Color.BLACK)
+                    setShadowLayer(25f, 0f, 0f, Color.BLACK)
                 }
-                
-                val metrics = textPaint.fontMetrics
-                val textY = 540f - (metrics.descent + metrics.ascent) / 2f
+                val textY = (HEIGHT / 2f) - ((textPaint.fontMetrics.descent + textPaint.fontMetrics.ascent) / 2f)
 
                 val bgRingPaint = Paint().apply {
                     color = Color.parseColor("#333333")
                     style = Paint.Style.STROKE
-                    strokeWidth = 25f
+                    strokeWidth = 30f
                     isAntiAlias = true
                 }
                 val progressRingPaint = Paint().apply {
                     color = Color.parseColor("#00E5FF")
                     style = Paint.Style.STROKE
-                    strokeWidth = 25f
+                    strokeWidth = 30f
                     isAntiAlias = true
                 }
-                val ringRect = RectF(360f, 140f, 1560f, 940f)
+                val ringRect = RectF((WIDTH - 800) / 2f, (HEIGHT - 800) / 2f, (WIDTH + 800) / 2f, (HEIGHT + 800) / 2f)
 
                 withContext(Dispatchers.Main) { tvStatus.text = "Rendering at maximum speed..." }
 
+                val totalFrames = totalSeconds * FPS
+                var lastAudioSecond = -1
+
+                // Main rendering loop - ultra optimized
                 for (frame in 0 until totalFrames) {
-                    val remainingSeconds = totalSeconds - (frame / frameRate)
-                    if (remainingSeconds < 0) break
+                    val currentSecond = frame / FPS
+                    val remaining = totalSeconds - currentSecond
+                    if (remaining < 0) break
 
-                    val timeString = formatTime(remainingSeconds)
+                    val timeStr = formatTime(remaining)
 
+                    // Draw frame
                     val canvas = surface.lockCanvas(null)
-                    val currentBgBitmap = bgBitmap
-                    
-                    if (hasBg && currentBgBitmap != null && !currentBgBitmap.isRecycled) {
-                        canvas.drawBitmap(currentBgBitmap, null, Rect(0, 0, 1920, 1080), null)
+                    if (bgBitmap != null && !bgBitmap.isRecycled) {
+                        canvas.drawBitmap(bgBitmap, null, Rect(0, 0, WIDTH, HEIGHT), null)
                     } else {
                         canvas.drawColor(Color.BLACK)
                     }
-                    
                     canvas.drawArc(ringRect, -90f, 360f, false, bgRingPaint)
-                    val progressAngle = (remainingSeconds.toFloat() / totalSeconds) * 360f
-                    canvas.drawArc(ringRect, -90f, progressAngle, false, progressRingPaint)
-
-                    canvas.drawText(timeString, 960f, textY, textPaint)
-                    
+                    canvas.drawArc(ringRect, -90f, (remaining.toFloat() / totalSeconds) * 360f, false, progressRingPaint)
+                    canvas.drawText(timeStr, WIDTH / 2f, textY, textPaint)
                     surface.unlockCanvasAndPost(canvas)
 
                     // Drain video output
-                    var videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
-                    while (videoOutIndex >= 0) {
-                        if (bufferInfo.size > 0) {
+                    var outIdx = videoCodec.dequeueOutputBuffer(videoInfo, 10000)
+                    while (outIdx >= 0) {
+                        if (videoInfo.size > 0) {
                             if (!muxerStarted) {
-                                videoTrackIndex = muxer.addTrack(videoCodec.outputFormat)
-                                audioTrackIndex = muxer.addTrack(audioCodec.outputFormat)
+                                videoTrack = muxer.addTrack(videoCodec.outputFormat)
+                                audioTrack = muxer.addTrack(audioCodec.outputFormat)
                                 muxer.start()
                                 muxerStarted = true
                             }
-                            val encodedData = videoCodec.getOutputBuffer(videoOutIndex)!!
-                            encodedData.position(bufferInfo.offset)
-                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                            muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                            val buf = videoCodec.getOutputBuffer(outIdx)!!
+                            buf.position(videoInfo.offset)
+                            buf.limit(videoInfo.offset + videoInfo.size)
+                            muxer.writeSampleData(videoTrack, buf, videoInfo)
                         }
-                        videoCodec.releaseOutputBuffer(videoOutIndex, false)
-                        videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 0)
+                        videoCodec.releaseOutputBuffer(outIdx, false)
+                        outIdx = videoCodec.dequeueOutputBuffer(videoInfo, 0)
                     }
 
-                    // Audio processing
-                    if (frame % frameRate == 0 && remainingSeconds > 0) {
-                        val inputBufferIndex = audioCodec.dequeueInputBuffer(10000)
-                        if (inputBufferIndex >= 0) {
-                            val inputBuffer = audioCodec.getInputBuffer(inputBufferIndex)!!
-                            inputBuffer.clear()
-                            val size = min(beepBytes.size, inputBuffer.remaining())
-                            inputBuffer.put(beepBytes, 0, size)
-                            val presentationTimeUs = (frame.toLong() * 1_000_000) / frameRate
-                            audioCodec.queueInputBuffer(inputBufferIndex, 0, size, presentationTimeUs, 0)
+                    // Feed audio once per second
+                    if (currentSecond != lastAudioSecond && remaining > 0) {
+                        lastAudioSecond = currentSecond
+                        val inIdx = audioCodec.dequeueInputBuffer(10000)
+                        if (inIdx >= 0) {
+                            val buf = audioCodec.getInputBuffer(inIdx)!!
+                            buf.clear()
+                            buf.put(oneSecondAudio, 0, min(oneSecondAudio.size, buf.remaining()))
+                            val pts = (currentSecond.toLong() * 1_000_000L)
+                            audioCodec.queueInputBuffer(inIdx, 0, oneSecondAudio.size, pts, 0)
                         }
-                    }
-                    
-                    var audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
-                    while (audioOutIndex >= 0) {
-                        if (audioBufferInfo.size > 0 && muxerStarted) {
-                            val encodedData = audioCodec.getOutputBuffer(audioOutIndex)!!
-                            encodedData.position(audioBufferInfo.offset)
-                            encodedData.limit(audioBufferInfo.offset + audioBufferInfo.size)
-                            muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
-                        }
-                        audioCodec.releaseOutputBuffer(audioOutIndex, false)
-                        audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 0)
                     }
 
-                    if (frame % 30 == 0) {
-                        val progress = (frame * 100) / totalFrames
+                    // Drain audio output
+                    outIdx = audioCodec.dequeueOutputBuffer(audioInfo, 10000)
+                    while (outIdx >= 0) {
+                        if (audioInfo.size > 0 && muxerStarted) {
+                            val buf = audioCodec.getOutputBuffer(outIdx)!!
+                            buf.position(audioInfo.offset)
+                            buf.limit(audioInfo.offset + audioInfo.size)
+                            muxer.writeSampleData(audioTrack, buf, audioInfo)
+                        }
+                        audioCodec.releaseOutputBuffer(outIdx, false)
+                        outIdx = audioCodec.dequeueOutputBuffer(audioInfo, 0)
+                    }
+
+                    // Update progress every second
+                    if (frame % FPS == 0) {
+                        val pct = (frame * 100) / totalFrames
                         withContext(Dispatchers.Main) {
-                            progressBar.progress = progress
-                            tvStatus.text = "Generating: $progress%"
+                            progressBar.progress = pct
+                            tvStatus.text = "Generating: $pct%"
                         }
                     }
                 }
 
-                // Finalize
+                // Finalize video stream
                 videoCodec.signalEndOfInputStream()
-                var videoDone = false
-                while (!videoDone) {
-                    val outIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
-                    if (outIndex >= 0) {
-                        if (bufferInfo.size > 0 && muxerStarted) {
-                            val encodedData = videoCodec.getOutputBuffer(outIndex)!!
-                            encodedData.position(bufferInfo.offset)
-                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                            muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                var done = false
+                while (!done) {
+                    val outIdx = videoCodec.dequeueOutputBuffer(videoInfo, 10000)
+                    if (outIdx >= 0) {
+                        if (videoInfo.size > 0 && muxerStarted) {
+                            val buf = videoCodec.getOutputBuffer(outIdx)!!
+                            buf.position(videoInfo.offset)
+                            buf.limit(videoInfo.offset + videoInfo.size)
+                            muxer.writeSampleData(videoTrack, buf, videoInfo)
                         }
-                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) videoDone = true
-                        videoCodec.releaseOutputBuffer(outIndex, false)
+                        if (videoInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) done = true
+                        videoCodec.releaseOutputBuffer(outIdx, false)
                     }
                 }
 
-                val audioInIndex = audioCodec.dequeueInputBuffer(10000)
-                if (audioInIndex >= 0) {
-                    audioCodec.queueInputBuffer(audioInIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                // Finalize audio stream
+                val inIdx = audioCodec.dequeueInputBuffer(10000)
+                if (inIdx >= 0) {
+                    audioCodec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                 }
-                var audioDone = false
-                while (!audioDone) {
-                    val outIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
-                    if (outIndex >= 0) {
-                        if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) audioDone = true
-                        audioCodec.releaseOutputBuffer(outIndex, false)
+                done = false
+                while (!done) {
+                    val outIdx = audioCodec.dequeueOutputBuffer(audioInfo, 10000)
+                    if (outIdx >= 0) {
+                        if (audioInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) done = true
+                        audioCodec.releaseOutputBuffer(outIdx, false)
                     }
                 }
 
+                // Cleanup
                 videoCodec.stop(); videoCodec.release()
                 audioCodec.stop(); audioCodec.release()
                 muxer.stop(); muxer.release()
                 bgBitmap?.recycle()
 
+                // Mark file as complete
+                contentValues.clear()
+                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+
+                lastGeneratedUri = uri
+
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = ProgressBar.GONE
-                    tvStatus.text = "Saved to Movies/Timer folder!"
+                    tvStatus.text = "Saved to Movies/Timer!"
                     btnGenerate.isEnabled = true
-                    Toast.makeText(this@MainActivity, "Ultra-fast video saved!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Lightning-fast video saved!", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: Exception) {
-                e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = ProgressBar.GONE
-                    tvStatus.text = "Error: ${e.message}"
+                    tvStatus.text = "Error"
                     btnGenerate.isEnabled = true
                     Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                 }
@@ -356,35 +374,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun formatTime(totalSec: Int): String {
-        val h = totalSec / 3600
-        val m = (totalSec % 3600) / 60
-        val s = totalSec % 60
+    private fun formatTime(sec: Int): String {
+        val h = sec / 3600
+        val m = (sec % 3600) / 60
+        val s = sec % 60
         return buildString(8) {
-            if (h < 10) append('0')
-            append(h).append(':')
-            if (m < 10) append('0')
-            append(m).append(':')
-            if (s < 10) append('0')
-            append(s)
+            if (h < 10) append('0'); append(h).append(':')
+            if (m < 10) append('0'); append(m).append(':')
+            if (s < 10) append('0'); append(s)
         }
     }
 
-    private fun generatePerfectBeep(sampleRate: Int, durationMs: Int, frequency: Double): ByteArray {
-        val numSamples = (sampleRate * durationMs) / 1000
-        val generatedSnd = ByteArray(numSamples * 2)
-        val fadeSamples = sampleRate / 100
+    private fun generateOneSecondAudio(sampleRate: Int, beepDurationMs: Int, freq: Double): ByteArray {
+        val totalSamples = sampleRate
+        val beepSamples = (sampleRate * beepDurationMs) / 1000
+        val data = ByteArray(totalSamples * 2)
+        val fade = sampleRate / 100
+        
         var idx = 0
-        for (i in 0 until numSamples) {
-            var envelope = 1.0
-            if (i < fadeSamples) envelope = i.toDouble() / fadeSamples
-            else if (i > numSamples - fadeSamples) envelope = (numSamples - i).toDouble() / fadeSamples
+        for (i in 0 until totalSamples) {
+            var sample = 0.0
+            if (i < beepSamples) {
+                var env = 1.0
+                if (i < fade) env = i.toDouble() / fade
+                else if (i > beepSamples - fade) env = (beepSamples - i).toDouble() / fade
+                sample = sin(2.0 * Math.PI * i * freq / sampleRate) * env * 30000
+            }
             
-            val dVal = sin(2.0 * Math.PI * i * frequency / sampleRate) * envelope
-            val sample = (dVal * 30000).toInt()
-            generatedSnd[idx++] = (sample and 0x00FF).toByte()
-            generatedSnd[idx++] = ((sample and 0xFF00) shr 8).toByte()
+            val sampleInt = sample.toInt()
+            data[idx++] = (sampleInt and 0x00FF).toByte()
+            data[idx++] = ((sampleInt and 0xFF00) shr 8).toByte()
         }
-        return generatedSnd
+        return data
     }
 }
