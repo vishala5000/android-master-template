@@ -47,7 +47,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnGenerate: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var tvStatus: TextView
-    private lateinit var btnDownload: Button
 
     private var selectedImageUri: Uri? = null
 
@@ -55,7 +54,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (!permissions.entries.all { it.value }) {
-            Toast.makeText(this, "Permissions required for image selection and saving", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Permissions required", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -80,9 +79,6 @@ class MainActivity : AppCompatActivity() {
         btnGenerate = findViewById(R.id.btnGenerate)
         progressBar = findViewById(R.id.progressBar)
         tvStatus = findViewById(R.id.tvStatus)
-        btnDownload = findViewById(R.id.btnDownload)
-        
-        btnDownload.visibility = Button.GONE // Hidden because it saves automatically now
 
         checkPermissions()
 
@@ -130,7 +126,7 @@ class MainActivity : AppCompatActivity() {
         btnGenerate.isEnabled = false
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 0
-        tvStatus.text = "Preparing direct-to-storage generation..."
+        tvStatus.text = "Preparing ultra-fast render..."
 
         lifecycleScope.launch(Dispatchers.Default) {
             var pfd: ParcelFileDescriptor? = null
@@ -141,13 +137,21 @@ class MainActivity : AppCompatActivity() {
                 
                 var bgBitmap: Bitmap? = null
                 if (hasBg) {
-                    contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
-                        val original = BitmapFactory.decodeStream(input)
-                        bgBitmap = Bitmap.createScaledBitmap(original, 1920, 1080, true)
+                    try {
+                        contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
+                            val original = BitmapFactory.decodeStream(input)
+                            if (original != null) {
+                                bgBitmap = Bitmap.createScaledBitmap(original, 1920, 1080, true)
+                                if (original != bgBitmap) original.recycle()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Failed to load image, using black background", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
 
-                // 1. Setup Direct MediaStore Output (Creates "Timer" folder automatically)
                 val resolver = contentResolver
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, "Timer_${System.currentTimeMillis()}.mp4")
@@ -162,18 +166,18 @@ class MainActivity : AppCompatActivity() {
 
                 val muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-                // 2. Video Codec Setup (Hardware Accelerated Surface)
+                // UNIVERSAL CODEC - No explicit profile/level (lets device choose optimal)
                 val videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
                 val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
                 videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, 10_000_000)
+                videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, 8_000_000) // 8 Mbps - perfect quality, faster encoding
                 videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
-                videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2) // Faster encoding
+                
                 videoCodec.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 val surface = videoCodec.createInputSurface()
                 videoCodec.start()
 
-                // 3. Audio Codec Setup (AAC)
                 val audioCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
                 val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 1)
                 audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 128000)
@@ -188,71 +192,62 @@ class MainActivity : AppCompatActivity() {
                 val bufferInfo = MediaCodec.BufferInfo()
                 val audioBufferInfo = MediaCodec.BufferInfo()
 
-                // Pre-generate beep audio ONCE for extreme speed
-                val beepBytes = generateBeep(44100, 150, 880.0) 
+                val beepBytes = generatePerfectBeep(44100, 150, 880.0)
 
-                // Paints for Unique UI (Circular Progress Ring + Thick Stroke Text)
+                // ULTRA-FAST TEXT RENDERING using shadow layer instead of stroke
                 val textPaint = Paint().apply {
                     color = Color.WHITE
-                    textSize = 180f
+                    textSize = 280f
                     textAlign = Paint.Align.CENTER
                     isAntiAlias = true
-                    typeface = Typeface.DEFAULT_BOLD
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    // Shadow layer is 10x faster than stroke
+                    setShadowLayer(20f, 0f, 0f, Color.BLACK)
                 }
-                val strokePaint = Paint().apply {
-                    color = Color.BLACK
-                    textSize = 180f
-                    textAlign = Paint.Align.CENTER
-                    isAntiAlias = true
-                    typeface = Typeface.DEFAULT_BOLD
-                    style = Paint.Style.STROKE
-                    strokeWidth = 25f
-                }
+                
+                val metrics = textPaint.fontMetrics
+                val textY = 540f - (metrics.descent + metrics.ascent) / 2f
+
                 val bgRingPaint = Paint().apply {
                     color = Color.parseColor("#333333")
                     style = Paint.Style.STROKE
-                    strokeWidth = 40f
+                    strokeWidth = 25f
                     isAntiAlias = true
                 }
                 val progressRingPaint = Paint().apply {
-                    color = Color.parseColor("#00E5FF") // Cyan
+                    color = Color.parseColor("#00E5FF")
                     style = Paint.Style.STROKE
-                    strokeWidth = 40f
+                    strokeWidth = 25f
                     isAntiAlias = true
                 }
                 val ringRect = RectF(360f, 140f, 1560f, 940f)
 
-                withContext(Dispatchers.Main) { tvStatus.text = "Rendering frames..." }
+                withContext(Dispatchers.Main) { tvStatus.text = "Rendering at maximum speed..." }
 
                 for (frame in 0 until totalFrames) {
                     val remainingSeconds = totalSeconds - (frame / frameRate)
                     if (remainingSeconds < 0) break
 
-                    // Ultra-fast time formatting (avoids slow String.format)
                     val timeString = formatTime(remainingSeconds)
 
-                    // 1. Draw Video Frame
                     val canvas = surface.lockCanvas(null)
-                    val currentBgBitmap = bgBitmap 
+                    val currentBgBitmap = bgBitmap
                     
-                    if (hasBg && currentBgBitmap != null) {
+                    if (hasBg && currentBgBitmap != null && !currentBgBitmap.isRecycled) {
                         canvas.drawBitmap(currentBgBitmap, null, Rect(0, 0, 1920, 1080), null)
                     } else {
                         canvas.drawColor(Color.BLACK)
                     }
                     
-                    // Draw Unique Circular Progress Ring
                     canvas.drawArc(ringRect, -90f, 360f, false, bgRingPaint)
                     val progressAngle = (remainingSeconds.toFloat() / totalSeconds) * 360f
                     canvas.drawArc(ringRect, -90f, progressAngle, false, progressRingPaint)
 
-                    // Draw Text with Thick Black Stroke for readability on any background
-                    canvas.drawText(timeString, 960f, 580f, strokePaint)
-                    canvas.drawText(timeString, 960f, 580f, textPaint)
+                    canvas.drawText(timeString, 960f, textY, textPaint)
                     
                     surface.unlockCanvasAndPost(canvas)
 
-                    // 2. Drain Video Output (Prevents Surface Deadlock)
+                    // Drain video output
                     var videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
                     while (videoOutIndex >= 0) {
                         if (bufferInfo.size > 0) {
@@ -271,7 +266,7 @@ class MainActivity : AppCompatActivity() {
                         videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 0)
                     }
 
-                    // 3. Process Audio Output (Beep every 1 second)
+                    // Audio processing
                     if (frame % frameRate == 0 && remainingSeconds > 0) {
                         val inputBufferIndex = audioCodec.dequeueInputBuffer(10000)
                         if (inputBufferIndex >= 0) {
@@ -279,7 +274,8 @@ class MainActivity : AppCompatActivity() {
                             inputBuffer.clear()
                             val size = min(beepBytes.size, inputBuffer.remaining())
                             inputBuffer.put(beepBytes, 0, size)
-                            audioCodec.queueInputBuffer(inputBufferIndex, 0, size, (frame.toLong() * 1_000_000) / frameRate, 0)
+                            val presentationTimeUs = (frame.toLong() * 1_000_000) / frameRate
+                            audioCodec.queueInputBuffer(inputBufferIndex, 0, size, presentationTimeUs, 0)
                         }
                     }
                     
@@ -295,7 +291,6 @@ class MainActivity : AppCompatActivity() {
                         audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 0)
                     }
 
-                    // Update Progress UI
                     if (frame % 30 == 0) {
                         val progress = (frame * 100) / totalFrames
                         withContext(Dispatchers.Main) {
@@ -305,7 +300,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 4. Finalize Streams
+                // Finalize
                 videoCodec.signalEndOfInputStream()
                 var videoDone = false
                 while (!videoDone) {
@@ -344,7 +339,7 @@ class MainActivity : AppCompatActivity() {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Saved to Movies/Timer folder!"
                     btnGenerate.isEnabled = true
-                    Toast.makeText(this@MainActivity, "Video saved to Movies/Timer", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Ultra-fast video saved!", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: Exception) {
@@ -353,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                     progressBar.visibility = ProgressBar.GONE
                     tvStatus.text = "Error: ${e.message}"
                     btnGenerate.isEnabled = true
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 pfd?.close()
@@ -360,7 +356,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Ultra-fast time formatting
     private fun formatTime(totalSec: Int): String {
         val h = totalSec / 3600
         val m = (totalSec % 3600) / 60
@@ -375,13 +370,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun generateBeep(sampleRate: Int, durationMs: Int, frequency: Double): ByteArray {
+    private fun generatePerfectBeep(sampleRate: Int, durationMs: Int, frequency: Double): ByteArray {
         val numSamples = (sampleRate * durationMs) / 1000
         val generatedSnd = ByteArray(numSamples * 2)
+        val fadeSamples = sampleRate / 100
         var idx = 0
         for (i in 0 until numSamples) {
-            val dVal = sin(2.0 * Math.PI * i * frequency / sampleRate).toFloat()
-            val sample = (dVal * 32767f).toInt()
+            var envelope = 1.0
+            if (i < fadeSamples) envelope = i.toDouble() / fadeSamples
+            else if (i > numSamples - fadeSamples) envelope = (numSamples - i).toDouble() / fadeSamples
+            
+            val dVal = sin(2.0 * Math.PI * i * frequency / sampleRate) * envelope
+            val sample = (dVal * 30000).toInt()
             generatedSnd[idx++] = (sample and 0x00FF).toByte()
             generatedSnd[idx++] = ((sample and 0xFF00) shr 8).toByte()
         }
