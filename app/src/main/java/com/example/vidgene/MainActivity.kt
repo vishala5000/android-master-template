@@ -1,456 +1,389 @@
-package com.example.vd // ⚠️ CHANGE THIS to com.example.vidgene IF YOUR FOLDER IS NAMED vidgene
+package com.example.timer
 
 import android.Manifest
-import android.content.Intent
+import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.provider.Settings
-import android.view.KeyEvent
-import android.view.View
-import android.view.ViewGroup
-import android.webkit.*
+import android.provider.MediaStore
+import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
-import android.widget.ImageButton
-import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.floatingactionbutton.FloatingActionButton
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
-
-data class VideoInfo(
-    val url: String,
-    val width: Int,
-    val height: Int,
-    val duration: Double,
-    val title: String,
-    val pageUrl: String
-) {
-    val resolution: String get() = "${width}x${height}"
-    val durationFormatted: String get() {
-        val mins = (duration / 60).toInt()
-        val secs = (duration % 60).toInt()
-        return "${mins}m ${secs}s"
-    }
-    val is1080p: Boolean get() = width >= 1920 || height >= 1080
-    val isFullLength: Boolean get() = duration >= 600
-}
+import java.nio.ByteBuffer
+import kotlin.math.sin
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var webView: WebView
-    private lateinit var etSearch: EditText
-    private lateinit var btnSearch: ImageButton
-    private lateinit var fabScan: FloatingActionButton
-    private lateinit var videoListContainer: LinearLayout
-    private lateinit var videoList: RecyclerView
-    private lateinit var btnCloseList: ImageButton
-    private lateinit var tvPanelTitle: TextView
+    private lateinit var etHours: EditText
+    private lateinit var etMinutes: EditText
+    private lateinit var etSeconds: EditText
+    private lateinit var cbBackground: CheckBox
+    private lateinit var btnPickImage: Button
+    private lateinit var btnGenerate: Button
+    private lateinit var progressBar: ProgressBar
+    private lateinit var tvStatus: TextView
+    private lateinit var btnDownload: Button
 
-    private val detectedVideos = mutableListOf<VideoInfo>()
-    private lateinit var videoAdapter: VideoAdapter
+    private var selectedImageUri: Uri? = null
+    private var generatedVideoUri: Uri? = null
+    private var tempVideoFile: File? = null
 
-    // ✅ FIX 1: Removed @Volatile because it cannot be used on 'val' (immutable reference)
-    private val sniffedVideoUrls = mutableMapOf<String, String>()
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.entries.all { it.value }
+        if (!allGranted) {
+            Toast.makeText(this, "Permissions required for image selection and saving", Toast.LENGTH_LONG).show()
+        }
+    }
 
-    private val VIDEO_DETECTOR_JS = """
-        (function() {
-            if (window.__vdInstalled) return;
-            window.__vdInstalled = true;
-            
-            function scanVideos() {
-                const videos = document.querySelectorAll('video');
-                const results = [];
-                videos.forEach(v => {
-                    if (v.videoWidth > 0 && v.videoHeight > 0 && v.duration > 0 && !isNaN(v.duration)) {
-                        let src = v.src || '';
-                        if (!src || src.startsWith('blob:')) {
-                            const source = v.querySelector('source');
-                            if (source) src = source.src || '';
-                        }
-                        results.push({
-                            url: src,
-                            width: v.videoWidth,
-                            height: v.videoHeight,
-                            duration: v.duration,
-                            title: document.title || 'Untitled',
-                            pageUrl: window.location.href
-                        });
-                    }
-                });
-                return results;
-            }
-            
-            function report() {
-                const results = scanVideos();
-                if (results.length > 0 && window.VDAndroid) {
-                    window.VDAndroid.onVideosDetected(JSON.stringify(results));
-                }
-            }
-            
-            function attachToVideo(v) {
-                if (v.dataset.vdAttached) return;
-                v.dataset.vdAttached = 'true';
-                v.addEventListener('loadedmetadata', report);
-                v.addEventListener('play', report);
-            }
-            
-            document.querySelectorAll('video').forEach(attachToVideo);
-            
-            const observer = new MutationObserver(() => {
-                document.querySelectorAll('video').forEach(attachToVideo);
-            });
-            observer.observe(document.body || document.documentElement, {
-                childList: true, subtree: true
-            });
-            
-            setTimeout(report, 1000);
-            setTimeout(report, 3000);
-        })();
-    """.trimIndent()
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            selectedImageUri = uri
+            Toast.makeText(this, "Image selected", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        initViews()
+        etHours = findViewById(R.id.etHours)
+        etMinutes = findViewById(R.id.etMinutes)
+        etSeconds = findViewById(R.id.etSeconds)
+        cbBackground = findViewById(R.id.cbBackground)
+        btnPickImage = findViewById(R.id.btnPickImage)
+        btnGenerate = findViewById(R.id.btnGenerate)
+        progressBar = findViewById(R.id.progressBar)
+        tvStatus = findViewById(R.id.tvStatus)
+        btnDownload = findViewById(R.id.btnDownload)
+
         checkPermissions()
-        setupWebView()
-        setupListeners()
-        setupBackPressHandler()
-    }
 
-    private fun initViews() {
-        webView = findViewById(R.id.webView)
-        etSearch = findViewById(R.id.etSearch)
-        btnSearch = findViewById(R.id.btnSearch)
-        fabScan = findViewById(R.id.fabScan)
-        videoListContainer = findViewById(R.id.videoListContainer)
-        videoList = findViewById(R.id.videoList)
-        btnCloseList = findViewById(R.id.btnCloseList)
-        tvPanelTitle = findViewById(R.id.tvPanelTitle)
-
-        videoAdapter = VideoAdapter(detectedVideos) { video ->
-            downloadVideo(video)
+        cbBackground.setOnCheckedChangeListener { _, isChecked ->
+            btnPickImage.isEnabled = isChecked
+            if (!isChecked) selectedImageUri = null
         }
-        videoList.layoutManager = LinearLayoutManager(this)
-        videoList.adapter = videoAdapter
+
+        btnPickImage.setOnClickListener {
+            imagePickerLauncher.launch("image/*")
+        }
+
+        btnGenerate.setOnClickListener {
+            val h = etHours.text.toString().toIntOrNull() ?: 0
+            val m = etMinutes.text.toString().toIntOrNull() ?: 0
+            val s = etSeconds.text.toString().toIntOrNull() ?: 0
+            val totalSeconds = (h * 3600) + (m * 60) + s
+
+            if (totalSeconds <= 0) {
+                Toast.makeText(this, "Please enter a valid time greater than 0", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            if (cbBackground.isChecked && selectedImageUri == null) {
+                Toast.makeText(this, "Please pick a background image first", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            startVideoGeneration(totalSeconds)
+        }
+
+        btnDownload.setOnClickListener {
+            saveToPublicFolder()
+        }
     }
 
     private fun checkPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                Toast.makeText(this, "Allow 'All Files Access' to save videos to /vidz folder", Toast.LENGTH_LONG).show()
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                }
-            }
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
         } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
-            }
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        if (permissions.any { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
+            requestPermissionLauncher.launch(permissions)
         }
     }
 
-    private fun setupWebView() {
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowContentAccess = true
-            allowFileAccess = true
-            mediaPlaybackRequiresUserGesture = false
-            setSupportMultipleWindows(false)
-            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
-        }
+    private fun startVideoGeneration(totalSeconds: Int) {
+        btnGenerate.isEnabled = false
+        btnDownload.visibility = Button.GONE
+        progressBar.visibility = ProgressBar.VISIBLE
+        progressBar.progress = 0
+        tvStatus.text = "Preparing generation..."
 
-        webView.addJavascriptInterface(object {
-            @JavascriptInterface
-            fun onVideosDetected(jsonArray: String) {
-                runOnUiThread {
-                    try {
-                        parseAndAddVideos(jsonArray)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
-        }, "VDAndroid")
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false
-            }
-
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                view?.evaluateJavascript(VIDEO_DETECTOR_JS, null)
-            }
-
-            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
-
-                // ✅ FIX 2: Removed request.mimeType because WebResourceRequest does not have this property.
-                // We rely strictly on URL extension checking, which is highly effective and compiles perfectly.
-                val isVideoFile = url.endsWith(".mp4", ignoreCase = true) ||
-                        url.endsWith(".webm", ignoreCase = true) ||
-                        url.endsWith(".mkv", ignoreCase = true) ||
-                        url.endsWith(".mov", ignoreCase = true) ||
-                        url.contains(".mp4?", ignoreCase = true) ||
-                        url.contains(".webm?", ignoreCase = true)
-
-                if (isVideoFile && !url.startsWith("blob:") && url.length > 50) {
-                    val pageUrl = webView.url ?: ""
-                    sniffedVideoUrls[pageUrl] = url
-                }
-                return super.shouldInterceptRequest(view, request)
-            }
-        }
-
-        webView.webChromeClient = WebChromeClient()
-
-        webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
-            val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
-            downloadFile(url, filename)
-        }
-    }
-
-    private fun parseAndAddVideos(jsonArray: String) {
-        val items = jsonArray.split("},{")
-
-        items.forEach { item ->
-            val cleaned = item.trim().removePrefix("[").removePrefix("{").removeSuffix("]").removeSuffix("}")
-            val url = extractJsonString(cleaned, "url")
-            val title = extractJsonString(cleaned, "title")
-            val pageUrl = extractJsonString(cleaned, "pageUrl")
-            val width = extractJsonInt(cleaned, "width")
-            val height = extractJsonInt(cleaned, "height")
-            val duration = extractJsonDouble(cleaned, "duration")
-
-            if (url.isNotEmpty() && width > 0 && height > 0 && duration > 0) {
-                val is1080p = width >= 1920 || height >= 1080
-                val isFullLength = duration >= 600
-
-                if (is1080p && isFullLength) {
-                    val video = VideoInfo(url, width, height, duration, title, pageUrl)
-                    if (detectedVideos.none { it.url == video.url }) {
-                        detectedVideos.add(video)
-                        videoAdapter.notifyDataSetChanged()
-                        updatePanelVisibility()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun extractJsonString(json: String, key: String): String {
-        val pattern = "\"$key\":\"([^\"]*)\""
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1) ?: ""
-    }
-
-    private fun extractJsonInt(json: String, key: String): Int {
-        val pattern = "\"$key\":(\\d+)"
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-    }
-
-    private fun extractJsonDouble(json: String, key: String): Double {
-        val pattern = "\"$key\":([0-9.]+)"
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
-    }
-
-    private fun updatePanelVisibility() {
-        if (detectedVideos.isEmpty()) {
-            videoListContainer.visibility = View.GONE
-            tvPanelTitle.text = "🎬 No 1080p Full-Length Videos Found"
-        } else {
-            videoListContainer.visibility = View.VISIBLE
-            tvPanelTitle.text = "🎬 ${detectedVideos.size} 1080p Full-Length Video(s) Detected"
-        }
-    }
-
-    private fun setupListeners() {
-        btnSearch.setOnClickListener { performSearch() }
-
-        etSearch.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
-                performSearch()
-                true
-            } else false
-        }
-
-        fabScan.setOnClickListener {
-            webView.evaluateJavascript(VIDEO_DETECTOR_JS, null)
-            Toast.makeText(this, "Scanning page for 1080p videos...", Toast.LENGTH_SHORT).show()
-        }
-
-        btnCloseList.setOnClickListener {
-            videoListContainer.visibility = View.GONE
-        }
-    }
-
-    private fun setupBackPressHandler() {
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                when {
-                    videoListContainer.visibility == View.VISIBLE -> videoListContainer.visibility = View.GONE
-                    webView.canGoBack() -> webView.goBack()
-                    else -> {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
-                    }
-                }
-            }
-        })
-    }
-
-    private fun performSearch() {
-        val query = etSearch.text.toString().trim()
-        if (query.isEmpty()) return
-
-        val url = if (query.startsWith("http://") || query.startsWith("https://")) {
-            query
-        } else {
-            val searchQuery = URLEncoder.encode("$query 1080p full length video", "UTF-8")
-            "https://www.google.com/search?q=$searchQuery"
-        }
-
-        detectedVideos.clear()
-        videoAdapter.notifyDataSetChanged()
-        updatePanelVisibility()
-        webView.loadUrl(url)
-        etSearch.setText("")
-        hideKeyboard()
-    }
-
-    private fun downloadVideo(video: VideoInfo) {
-        var urlToDownload = video.url
-
-        if (urlToDownload.isEmpty() || urlToDownload.startsWith("blob:")) {
-            urlToDownload = sniffedVideoUrls[video.pageUrl] ?: ""
-        }
-
-        if (urlToDownload.isEmpty()) {
-            Toast.makeText(this, "❌ Cannot download: video uses protected streaming", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        if (urlToDownload.endsWith(".m3u8") || urlToDownload.endsWith(".mpd")) {
-            Toast.makeText(this, "❌ HLS/DASH streams require ffmpeg to download", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val filename = "vd_${video.width}p_${video.duration.toInt()}s_${System.currentTimeMillis()}.mp4"
-        downloadFile(urlToDownload, filename)
-    }
-
-    private fun downloadFile(fileUrl: String, rawFilename: String) {
-        val filename = rawFilename.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
-        val vidzDir = File(Environment.getExternalStorageDirectory(), "vidz")
-        if (!vidzDir.exists() && !vidzDir.mkdirs()) {
-            Toast.makeText(this, "Cannot create /vidz folder", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        Toast.makeText(this, "⬇️ Downloading: $filename", Toast.LENGTH_SHORT).show()
-
-        Thread {
+        lifecycleScope.launch(Dispatchers.Default) {
             try {
-                val outFile = File(vidzDir, filename)
-                val url = URL(fileUrl)
-                val connection = url.openConnection() as HttpURLConnection
-                connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
-                val cookie = CookieManager.getInstance().getCookie(fileUrl)
-                if (cookie != null) connection.setRequestProperty("Cookie", cookie)
-                connection.connect()
+                tempVideoFile = File(cacheDir, "temp_countdown.mp4")
+                if (tempVideoFile!!.exists()) tempVideoFile!!.delete()
 
-                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                    throw Exception("HTTP ${connection.responseCode}")
+                val frameRate = 30
+                val totalFrames = totalSeconds * frameRate
+                val hasBg = cbBackground.isChecked && selectedImageUri != null
+                
+                var bgBitmap: Bitmap? = null
+                if (hasBg) {
+                    contentResolver.openInputStream(selectedImageUri!!)?.use { input ->
+                        val original = BitmapFactory.decodeStream(input)
+                        bgBitmap = Bitmap.createScaledBitmap(original, 1920, 1080, true)
+                    }
                 }
 
-                val inputStream = connection.inputStream
-                val outputStream = FileOutputStream(outFile)
-                val data = ByteArray(8192)
-                var count: Int
-                var totalBytes = 0L
-                while (inputStream.read(data).also { count = it } != -1) {
-                    outputStream.write(data, 0, count)
-                    totalBytes += count
-                }
-                outputStream.close()
-                inputStream.close()
-                connection.disconnect()
+                val muxer = MediaMuxer(tempVideoFile!!.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-                runOnUiThread {
-                    val sizeMB = String.format("%.1f", totalBytes / 1024.0 / 1024.0)
-                    Toast.makeText(this, "✅ Saved: /vidz/$filename ($sizeMB MB)", Toast.LENGTH_LONG).show()
+                // Video Codec Setup
+                val videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
+                videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, 10_000_000)
+                videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                videoCodec.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val surface = videoCodec.createInputSurface()
+                videoCodec.start()
+
+                // Audio Codec Setup (AAC)
+                val audioCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+                val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 1)
+                audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 128000)
+                audioFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+                audioCodec.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                audioCodec.start()
+
+                var videoTrackIndex = -1
+                var audioTrackIndex = -1
+                var muxerStarted = false
+
+                val bufferInfo = MediaCodec.BufferInfo()
+                val audioBufferInfo = MediaCodec.BufferInfo()
+
+                val textPaint = Paint().apply {
+                    color = Color.WHITE
+                    textSize = 200f
+                    textAlign = Paint.Align.CENTER
+                    isAntiAlias = true
+                    typeface = Typeface.DEFAULT_BOLD
+                }
+                val strokePaint = Paint().apply {
+                    color = Color.BLACK
+                    textSize = 200f
+                    textAlign = Paint.Align.CENTER
+                    isAntiAlias = true
+                    typeface = Typeface.DEFAULT_BOLD
+                    style = Paint.Style.STROKE
+                    strokeWidth = 25f
+                }
+
+                withContext(Dispatchers.Main) { tvStatus.text = "Rendering frames..." }
+
+                for (frame in 0 until totalFrames) {
+                    val remainingSeconds = totalSeconds - (frame / frameRate)
+                    if (remainingSeconds < 0) break
+
+                    val timeString = String.format("%02d:%02d:%02d", 
+                        remainingSeconds / 3600, 
+                        (remainingSeconds % 3600) / 60, 
+                        remainingSeconds % 60
+                    )
+
+                    // 1. Draw Video Frame
+                    val canvas = surface.lockCanvas(null)
+                    if (hasBg && bgBitmap != null) {
+                        canvas.drawBitmap(bgBitmap, null, Rect(0, 0, 1920, 1080), null)
+                        canvas.drawText(timeString, 960f, 590f, strokePaint)
+                    } else {
+                        canvas.drawColor(Color.BLACK)
+                    }
+                    canvas.drawText(timeString, 960f, 590f, textPaint)
+                    surface.unlockCanvasAndPost(canvas)
+
+                    // 2. Process Video Output
+                    val videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
+                    if (videoOutIndex >= 0) {
+                        if (!muxerStarted && bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            // Skip config frame for muxer start, wait for actual data
+                        }
+                        if (bufferInfo.size > 0) {
+                            if (!muxerStarted) {
+                                videoTrackIndex = muxer.addTrack(videoCodec.outputFormat)
+                                audioTrackIndex = muxer.addTrack(audioCodec.outputFormat)
+                                muxer.start()
+                                muxerStarted = true
+                            }
+                            val encodedData = videoCodec.getOutputBuffer(videoOutIndex)!!
+                            encodedData.position(bufferInfo.offset)
+                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                        }
+                        videoCodec.releaseOutputBuffer(videoOutIndex, false)
+                    }
+
+                    // 3. Process Audio Output (Beep every 1 second / 30 frames)
+                    if (frame % frameRate == 0 && remainingSeconds > 0 && remainingSeconds <= 10) {
+                        val beepBytes = generateBeep(44100, 400, 880.0)
+                        val inputBufferIndex = audioCodec.dequeueInputBuffer(10000)
+                        if (inputBufferIndex >= 0) {
+                            val inputBuffer = audioCodec.getInputBuffer(inputBufferIndex)!!
+                            inputBuffer.clear()
+                            val size = minOf(beepBytes.size, inputBuffer.remaining())
+                            inputBuffer.put(beepBytes, 0, size)
+                            audioCodec.queueInputBuffer(inputBufferIndex, 0, size, (frame.toLong() * 1_000_000) / frameRate, 0)
+                        }
+                    }
+                    
+                    val audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
+                    if (audioOutIndex >= 0) {
+                        if (audioBufferInfo.size > 0 && muxerStarted) {
+                            val encodedData = audioCodec.getOutputBuffer(audioOutIndex)!!
+                            encodedData.position(audioBufferInfo.offset)
+                            encodedData.limit(audioBufferInfo.offset + audioBufferInfo.size)
+                            muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
+                        }
+                        audioCodec.releaseOutputBuffer(audioOutIndex, false)
+                    }
+
+                    // Update Progress
+                    if (frame % 30 == 0) {
+                        val progress = (frame * 100) / totalFrames
+                        withContext(Dispatchers.Main) {
+                            progressBar.progress = progress
+                            tvStatus.text = "Generating: $progress%"
+                        }
+                    }
+                }
+
+                // End of stream
+                videoCodec.signalEndOfInputStream()
+                var videoDone = false
+                while (!videoDone) {
+                    val outIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
+                    if (outIndex >= 0) {
+                        if (bufferInfo.size > 0 && muxerStarted) {
+                            val encodedData = videoCodec.getOutputBuffer(outIndex)!!
+                            encodedData.position(bufferInfo.offset)
+                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                        }
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            videoDone = true
+                        }
+                        videoCodec.releaseOutputBuffer(outIndex, false)
+                    }
+                }
+
+                audioCodec.signalEndOfInputStream()
+                var audioDone = false
+                while (!audioDone) {
+                    val outIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
+                    if (outIndex >= 0) {
+                        if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            audioDone = true
+                        }
+                        audioCodec.releaseOutputBuffer(outIndex, false)
+                    }
+                }
+
+                videoCodec.stop()
+                videoCodec.release()
+                audioCodec.stop()
+                audioCodec.release()
+                muxer.stop()
+                muxer.release()
+                bgBitmap?.recycle()
+
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = ProgressBar.GONE
+                    tvStatus.text = "Generation Complete!"
+                    btnDownload.visibility = Button.VISIBLE
+                    btnGenerate.isEnabled = true
+                    Toast.makeText(this@MainActivity, "Video generated successfully", Toast.LENGTH_SHORT).show()
+                }
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = ProgressBar.GONE
+                    tvStatus.text = "Error: ${e.message}"
+                    btnGenerate.isEnabled = true
+                }
+            }
+        }
+    }
+
+    private fun generateBeep(sampleRate: Int, durationMs: Int, frequency: Double): ByteArray {
+        val numSamples = (sampleRate * durationMs) / 1000
+        val generatedSnd = ByteArray(numSamples * 2)
+        var idx = 0
+        for (i in 0 until numSamples) {
+            val dVal = sin(2 * Math.PI * i * frequency / sampleRate).toFloat()
+            val sample = (dVal * 32767).toInt().toShort()
+            generatedSnd[idx++] = (sample and 0x00ff).toByte()
+            generatedSnd[idx++] = ((sample and 0xff00) shr 8).toByte()
+        }
+        return generatedSnd
+    }
+
+    private fun saveToPublicFolder() {
+        if (tempVideoFile == null || !tempVideoFile!!.exists()) return
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "countdown_timer_${System.currentTimeMillis()}.mp4")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Timer")
+                }
+
+                val resolver = contentResolver
+                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { outputStream ->
+                        tempVideoFile!!.inputStream().use { inputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Saved to Movies/Timer folder", Toast.LENGTH_LONG).show()
+                        btnDownload.visibility = Button.GONE
+                        tvStatus.text = "Saved to internal storage"
+                    }
+                } else {
+                    throw Exception("Failed to create MediaStore entry")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "❌ Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
-        }.start()
-    }
-
-    private fun hideKeyboard() {
-        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
-        imm.hideSoftInputFromWindow(webView.windowToken, 0)
-    }
-
-    inner class VideoAdapter(
-        private val videos: List<VideoInfo>,
-        private val onClick: (VideoInfo) -> Unit
-    ) : RecyclerView.Adapter<VideoAdapter.VH>() {
-
-        inner class VH(view: View) : RecyclerView.ViewHolder(view) {
-            val tvTitle: TextView = view as TextView
         }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val tv = TextView(parent.context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                setPadding(16, 16, 16, 16)
-                setTextColor(0xFFFFFFFF.toInt())
-                setBackgroundColor(0xFF2A2A2A.toInt())
-                val margin = android.widget.LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 8) }
-                layoutParams = margin
-                textSize = 13f
-            }
-            return VH(tv)
-        }
-
-        override fun onBindViewHolder(holder: VH, position: Int) {
-            val video = videos[position]
-            holder.tvTitle.text = "📺 ${video.resolution} • ${video.durationFormatted}\n${video.title}\n🔗 ${video.url.take(60)}..."
-            holder.tvTitle.setOnClickListener { onClick(video) }
-        }
-
-        override fun getItemCount() = videos.size
     }
 }
