@@ -1,4 +1,4 @@
-package com.example.timer // CHANGE TO com.example.vidgene IF THAT IS YOUR FOLDER NAME
+package com.example.timer
 
 import android.Manifest
 import android.content.ContentValues
@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -18,6 +19,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.widget.Button
 import android.widget.CheckBox
@@ -32,7 +34,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -49,13 +50,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDownload: Button
 
     private var selectedImageUri: Uri? = null
-    private var tempVideoFile: File? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.entries.all { it.value }
-        if (!allGranted) {
+        if (!permissions.entries.all { it.value }) {
             Toast.makeText(this, "Permissions required for image selection and saving", Toast.LENGTH_LONG).show()
         }
     }
@@ -82,6 +81,8 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         tvStatus = findViewById(R.id.tvStatus)
         btnDownload = findViewById(R.id.btnDownload)
+        
+        btnDownload.visibility = Button.GONE // Hidden because it saves automatically now
 
         checkPermissions()
 
@@ -112,10 +113,6 @@ class MainActivity : AppCompatActivity() {
 
             startVideoGeneration(totalSeconds)
         }
-
-        btnDownload.setOnClickListener {
-            saveToPublicFolder()
-        }
     }
 
     private fun checkPermissions() {
@@ -131,16 +128,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun startVideoGeneration(totalSeconds: Int) {
         btnGenerate.isEnabled = false
-        btnDownload.visibility = Button.GONE
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.progress = 0
-        tvStatus.text = "Preparing generation..."
+        tvStatus.text = "Preparing direct-to-storage generation..."
 
         lifecycleScope.launch(Dispatchers.Default) {
+            var pfd: ParcelFileDescriptor? = null
             try {
-                tempVideoFile = File(cacheDir, "temp_countdown.mp4")
-                if (tempVideoFile!!.exists()) tempVideoFile!!.delete()
-
                 val frameRate = 30
                 val totalFrames = totalSeconds * frameRate
                 val hasBg = cbBackground.isChecked && selectedImageUri != null
@@ -153,9 +147,22 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                val muxer = MediaMuxer(tempVideoFile!!.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                // 1. Setup Direct MediaStore Output (Creates "Timer" folder automatically)
+                val resolver = contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "Timer_${System.currentTimeMillis()}.mp4")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Timer")
+                }
+                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+                    ?: throw Exception("Failed to create MediaStore entry")
 
-                // Video Codec Setup
+                pfd = resolver.openFileDescriptor(uri, "rw")
+                    ?: throw Exception("Failed to open file descriptor")
+
+                val muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+                // 2. Video Codec Setup (Hardware Accelerated Surface)
                 val videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
                 val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
                 videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -166,7 +173,7 @@ class MainActivity : AppCompatActivity() {
                 val surface = videoCodec.createInputSurface()
                 videoCodec.start()
 
-                // Audio Codec Setup (AAC)
+                // 3. Audio Codec Setup (AAC)
                 val audioCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
                 val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 1)
                 audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 128000)
@@ -178,25 +185,42 @@ class MainActivity : AppCompatActivity() {
                 var audioTrackIndex = -1
                 var muxerStarted = false
 
-                val bufferInfo = android.media.MediaCodec.BufferInfo()
-                val audioBufferInfo = android.media.MediaCodec.BufferInfo()
+                val bufferInfo = MediaCodec.BufferInfo()
+                val audioBufferInfo = MediaCodec.BufferInfo()
 
+                // Pre-generate beep audio ONCE for extreme speed
+                val beepBytes = generateBeep(44100, 150, 880.0) 
+
+                // Paints for Unique UI (Circular Progress Ring + Thick Stroke Text)
                 val textPaint = Paint().apply {
                     color = Color.WHITE
-                    textSize = 200f
+                    textSize = 180f
                     textAlign = Paint.Align.CENTER
                     isAntiAlias = true
                     typeface = Typeface.DEFAULT_BOLD
                 }
                 val strokePaint = Paint().apply {
                     color = Color.BLACK
-                    textSize = 200f
+                    textSize = 180f
                     textAlign = Paint.Align.CENTER
                     isAntiAlias = true
                     typeface = Typeface.DEFAULT_BOLD
                     style = Paint.Style.STROKE
                     strokeWidth = 25f
                 }
+                val bgRingPaint = Paint().apply {
+                    color = Color.parseColor("#333333")
+                    style = Paint.Style.STROKE
+                    strokeWidth = 40f
+                    isAntiAlias = true
+                }
+                val progressRingPaint = Paint().apply {
+                    color = Color.parseColor("#00E5FF") // Cyan
+                    style = Paint.Style.STROKE
+                    strokeWidth = 40f
+                    isAntiAlias = true
+                }
+                val ringRect = RectF(360f, 140f, 1560f, 940f)
 
                 withContext(Dispatchers.Main) { tvStatus.text = "Rendering frames..." }
 
@@ -204,29 +228,33 @@ class MainActivity : AppCompatActivity() {
                     val remainingSeconds = totalSeconds - (frame / frameRate)
                     if (remainingSeconds < 0) break
 
-                    val timeString = String.format("%02d:%02d:%02d", 
-                        remainingSeconds / 3600, 
-                        (remainingSeconds % 3600) / 60, 
-                        remainingSeconds % 60
-                    )
+                    // Ultra-fast time formatting (avoids slow String.format)
+                    val timeString = formatTime(remainingSeconds)
 
                     // 1. Draw Video Frame
                     val canvas = surface.lockCanvas(null)
+                    val currentBgBitmap = bgBitmap 
                     
-                    // FIX 1: Use a local val to prevent "captured by a changing closure" smart cast error
-                    val currentBgBitmap = bgBitmap
                     if (hasBg && currentBgBitmap != null) {
                         canvas.drawBitmap(currentBgBitmap, null, Rect(0, 0, 1920, 1080), null)
-                        canvas.drawText(timeString, 960f, 590f, strokePaint)
                     } else {
                         canvas.drawColor(Color.BLACK)
                     }
-                    canvas.drawText(timeString, 960f, 590f, textPaint)
+                    
+                    // Draw Unique Circular Progress Ring
+                    canvas.drawArc(ringRect, -90f, 360f, false, bgRingPaint)
+                    val progressAngle = (remainingSeconds.toFloat() / totalSeconds) * 360f
+                    canvas.drawArc(ringRect, -90f, progressAngle, false, progressRingPaint)
+
+                    // Draw Text with Thick Black Stroke for readability on any background
+                    canvas.drawText(timeString, 960f, 580f, strokePaint)
+                    canvas.drawText(timeString, 960f, 580f, textPaint)
+                    
                     surface.unlockCanvasAndPost(canvas)
 
-                    // 2. Process Video Output
-                    val videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
-                    if (videoOutIndex >= 0) {
+                    // 2. Drain Video Output (Prevents Surface Deadlock)
+                    var videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
+                    while (videoOutIndex >= 0) {
                         if (bufferInfo.size > 0) {
                             if (!muxerStarted) {
                                 videoTrackIndex = muxer.addTrack(videoCodec.outputFormat)
@@ -240,11 +268,11 @@ class MainActivity : AppCompatActivity() {
                             muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                         }
                         videoCodec.releaseOutputBuffer(videoOutIndex, false)
+                        videoOutIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 0)
                     }
 
-                    // 3. Process Audio Output (Beep every 1 second / 30 frames)
-                    if (frame % frameRate == 0 && remainingSeconds > 0 && remainingSeconds <= 10) {
-                        val beepBytes = generateBeep(44100, 400, 880.0)
+                    // 3. Process Audio Output (Beep every 1 second)
+                    if (frame % frameRate == 0 && remainingSeconds > 0) {
                         val inputBufferIndex = audioCodec.dequeueInputBuffer(10000)
                         if (inputBufferIndex >= 0) {
                             val inputBuffer = audioCodec.getInputBuffer(inputBufferIndex)!!
@@ -255,8 +283,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     
-                    val audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
-                    if (audioOutIndex >= 0) {
+                    var audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
+                    while (audioOutIndex >= 0) {
                         if (audioBufferInfo.size > 0 && muxerStarted) {
                             val encodedData = audioCodec.getOutputBuffer(audioOutIndex)!!
                             encodedData.position(audioBufferInfo.offset)
@@ -264,9 +292,10 @@ class MainActivity : AppCompatActivity() {
                             muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
                         }
                         audioCodec.releaseOutputBuffer(audioOutIndex, false)
+                        audioOutIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 0)
                     }
 
-                    // Update Progress
+                    // Update Progress UI
                     if (frame % 30 == 0) {
                         val progress = (frame * 100) / totalFrames
                         withContext(Dispatchers.Main) {
@@ -276,7 +305,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // End of stream
+                // 4. Finalize Streams
                 videoCodec.signalEndOfInputStream()
                 var videoDone = false
                 while (!videoDone) {
@@ -288,39 +317,34 @@ class MainActivity : AppCompatActivity() {
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
                             muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                         }
-                        if (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            videoDone = true
-                        }
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) videoDone = true
                         videoCodec.releaseOutputBuffer(outIndex, false)
                     }
                 }
 
-                audioCodec.signalEndOfInputStream()
+                val audioInIndex = audioCodec.dequeueInputBuffer(10000)
+                if (audioInIndex >= 0) {
+                    audioCodec.queueInputBuffer(audioInIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                }
                 var audioDone = false
                 while (!audioDone) {
                     val outIndex = audioCodec.dequeueOutputBuffer(audioBufferInfo, 10000)
                     if (outIndex >= 0) {
-                        if (audioBufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            audioDone = true
-                        }
+                        if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) audioDone = true
                         audioCodec.releaseOutputBuffer(outIndex, false)
                     }
                 }
 
-                videoCodec.stop()
-                videoCodec.release()
-                audioCodec.stop()
-                audioCodec.release()
-                muxer.stop()
-                muxer.release()
+                videoCodec.stop(); videoCodec.release()
+                audioCodec.stop(); audioCodec.release()
+                muxer.stop(); muxer.release()
                 bgBitmap?.recycle()
 
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = ProgressBar.GONE
-                    tvStatus.text = "Generation Complete!"
-                    btnDownload.visibility = Button.VISIBLE
+                    tvStatus.text = "Saved to Movies/Timer folder!"
                     btnGenerate.isEnabled = true
-                    Toast.makeText(this@MainActivity, "Video generated successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Video saved to Movies/Timer", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: Exception) {
@@ -330,7 +354,24 @@ class MainActivity : AppCompatActivity() {
                     tvStatus.text = "Error: ${e.message}"
                     btnGenerate.isEnabled = true
                 }
+            } finally {
+                pfd?.close()
             }
+        }
+    }
+
+    // Ultra-fast time formatting
+    private fun formatTime(totalSec: Int): String {
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return buildString(8) {
+            if (h < 10) append('0')
+            append(h).append(':')
+            if (m < 10) append('0')
+            append(m).append(':')
+            if (s < 10) append('0')
+            append(s)
         }
     }
 
@@ -340,49 +381,10 @@ class MainActivity : AppCompatActivity() {
         var idx = 0
         for (i in 0 until numSamples) {
             val dVal = sin(2.0 * Math.PI * i * frequency / sampleRate).toFloat()
-            
-            // FIX 2: Keep as Int for bitwise operations to avoid Short/BigInteger receiver mismatch errors
             val sample = (dVal * 32767f).toInt()
             generatedSnd[idx++] = (sample and 0x00FF).toByte()
             generatedSnd[idx++] = ((sample and 0xFF00) shr 8).toByte()
         }
         return generatedSnd
-    }
-
-    private fun saveToPublicFolder() {
-        if (tempVideoFile == null || !tempVideoFile!!.exists()) return
-
-        lifecycleScope.launch(Dispatchers.Default) {
-            try {
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, "countdown_timer_${System.currentTimeMillis()}.mp4")
-                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Timer")
-                }
-
-                val resolver = contentResolver
-                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-
-                if (uri != null) {
-                    resolver.openOutputStream(uri)?.use { outputStream ->
-                        tempVideoFile!!.inputStream().use { inputStream ->
-                            inputStream.copyTo(outputStream)
-                        }
-                    }
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "Saved to Movies/Timer folder", Toast.LENGTH_LONG).show()
-                        btnDownload.visibility = Button.GONE
-                        tvStatus.text = "Saved to internal storage"
-                    }
-                } else {
-                    throw Exception("Failed to create MediaStore entry")
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
     }
 }
