@@ -62,8 +62,9 @@ class MainActivity : AppCompatActivity() {
                 setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(48000)
-                setAudioEncodingBitRate(256000)
+                setAudioChannels(1) // Mono prevents channel-mapping crashes on some devices
+                setAudioSamplingRate(44100) // 44.1kHz is universally supported
+                setAudioEncodingBitRate(128000) // 128kbps is safe and high quality for voice
                 setOutputFile(tempAudioFile!!.absolutePath)
                 prepare()
                 start()
@@ -71,6 +72,8 @@ class MainActivity : AppCompatActivity() {
             updateUIState(State.RECORDING)
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to start: ${e.message}", Toast.LENGTH_SHORT).show()
+            mediaRecorder?.release()
+            mediaRecorder = null
         }
     }
 
@@ -78,12 +81,15 @@ class MainActivity : AppCompatActivity() {
         try {
             mediaRecorder?.apply { 
                 stop()
+                reset() // CRITICAL: Prevents native C++ state machine crashes
                 release() 
             }
             mediaRecorder = null
             updateUIState(State.STOPPED)
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to stop", Toast.LENGTH_SHORT).show()
+            mediaRecorder?.release()
+            mediaRecorder = null
         }
     }
 
@@ -97,77 +103,26 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        try {
-            // Safely get directory. Falls back to internal filesDir if external is unmounted/null
-            val baseDir = getExternalFilesDir(Environment.DIRECTORY_RECORDINGS) ?: filesDir
-            val dir = File(baseDir, "VRecorder")
+        // Show loading state
+        binding.saveButton.isEnabled = false
+        binding.saveButton.text = "Saving..."
 
-            if (!dir.exists()) {
-                val created = dir.mkdirs()
-                if (!created && !dir.exists()) {
-                    throw Exception("Failed to create folder")
+        // CRITICAL FIX: Run file operations on a background thread to prevent ANR (App Not Responding) crashes
+        Thread {
+            try {
+                // Small delay to ensure OS releases file lock after MediaRecorder.release()
+                Thread.sleep(200)
+
+                val baseDir = getExternalFilesDir(Environment.DIRECTORY_RECORDINGS) ?: filesDir
+                val dir = File(baseDir, "VRecorder")
+
+                if (!dir.exists()) {
+                    dir.mkdirs()
                 }
-            }
 
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val finalFile = File(dir, "VRecorder_$timestamp.m4a")
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val finalFile = File(dir, "VRecorder_$timestamp.m4a")
 
-            // Copy file safely
-            file.inputStream().use { input ->
-                finalFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            // Verify copy was successful before deleting temp
-            if (finalFile.exists() && finalFile.length() > 0) {
-                file.delete()
-                tempAudioFile = null
-                binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
-                Toast.makeText(this, "Audio saved successfully!", Toast.LENGTH_LONG).show()
-            } else {
-                throw Exception("File copy failed")
-            }
-
-            updateUIState(State.READY)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private enum class State { READY, RECORDING, STOPPED }
-
-    private fun updateUIState(state: State) {
-        when (state) {
-            State.READY -> {
-                binding.statusTextView.text = "Status: Ready"
-                binding.statusTextView.setTextColor(colorWhite)
-                binding.recordButton.isEnabled = true
-                binding.stopButton.isEnabled = false
-                binding.saveButton.isEnabled = false
-            }
-            State.RECORDING -> {
-                binding.statusTextView.text = "Status: Recording... Read your story now."
-                binding.statusTextView.setTextColor(colorRed)
-                binding.recordButton.isEnabled = false
-                binding.stopButton.isEnabled = true
-                binding.saveButton.isEnabled = false
-            }
-            State.STOPPED -> {
-                binding.statusTextView.text = "Status: Recording finished. Ready to save."
-                binding.statusTextView.setTextColor(colorWhite)
-                binding.recordButton.isEnabled = true
-                binding.stopButton.isEnabled = false
-                binding.saveButton.isEnabled = true
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        mediaRecorder?.release()
-        mediaRecorder = null
-        tempAudioFile?.delete()
-    }
-}
+                // Copy file safely using FileChannel
+                file.inputStream().channel.use { inputChannel ->
+                    finalFile.outputStream().
