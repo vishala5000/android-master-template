@@ -125,4 +125,69 @@ class MainActivity : AppCompatActivity() {
 
                 // Copy file safely using FileChannel
                 file.inputStream().channel.use { inputChannel ->
-                    finalFile.outputStream().
+                    finalFile.outputStream().channel.use { outputChannel ->
+                        inputChannel.transferTo(0, inputChannel.size(), outputChannel)
+                    }
+                }
+
+                // Verify copy was successful before deleting temp
+                if (finalFile.exists() && finalFile.length() > 0) {
+                    file.delete()
+                    tempAudioFile = null
+                    
+                    // Update UI on the main thread
+                    runOnUiThread {
+                        binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
+                        Toast.makeText(this, "Audio saved successfully!", Toast.LENGTH_LONG).show()
+                        updateUIState(State.READY)
+                    }
+                } else {
+                    throw Exception("File copy failed")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    updateUIState(State.STOPPED) // Re-enable save button if it failed
+                }
+            }
+        }.start()
+    }
+
+    private enum class State { READY, RECORDING, STOPPED }
+
+    private fun updateUIState(state: State) {
+        when (state) {
+            State.READY -> {
+                binding.statusTextView.text = "Status: Ready"
+                binding.statusTextView.setTextColor(colorWhite)
+                binding.recordButton.isEnabled = true
+                binding.stopButton.isEnabled = false
+                binding.saveButton.isEnabled = false
+                binding.saveButton.text = "Save to Recordings"
+            }
+            State.RECORDING -> {
+                binding.statusTextView.text = "Status: Recording... Read your story now."
+                binding.statusTextView.setTextColor(colorRed)
+                binding.recordButton.isEnabled = false
+                binding.stopButton.isEnabled = true
+                binding.saveButton.isEnabled = false
+            }
+            State.STOPPED -> {
+                binding.statusTextView.text = "Status: Recording finished. Ready to save."
+                binding.statusTextView.setTextColor(colorWhite)
+                binding.recordButton.isEnabled = true
+                binding.stopButton.isEnabled = false
+                binding.saveButton.isEnabled = true
+                binding.saveButton.text = "Save to Recordings"
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mediaRecorder?.release()
+        mediaRecorder = null
+        tempAudioFile?.delete()
+    }
+}
