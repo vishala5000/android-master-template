@@ -22,13 +22,11 @@ android {
         }
     }
     
-    // CRITICAL FOR CI/CD: Enables ViewBinding so ActivityMainBinding works
     buildFeatures {
         viewBinding true
     }
 
     compileOptions {
-        // CRITICAL FOR CI/CD: GitHub Actions uses JDK 17 by default
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
