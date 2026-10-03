@@ -21,6 +21,12 @@ class MainActivity : AppCompatActivity() {
     private var mediaRecorder: MediaRecorder? = null
     private var tempAudioFile: File? = null
 
+    // Hex colors matching the app theme
+    private val colorNeonBlue = 0xFF00BFFF.toInt()
+    private val colorSilver = 0xFFC0C0C0.toInt()
+    private val colorWhite = 0xFFFFFFFF.toInt()
+    private val colorRed = 0xFFFF0000.toInt()
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -36,6 +42,10 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setupUI()
+    }
+
+    private fun setupUI() {
         binding.recordButton.setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 startRecording()
@@ -51,6 +61,9 @@ class MainActivity : AppCompatActivity() {
         binding.saveButton.setOnClickListener {
             saveRecording()
         }
+        
+        // Initial UI state
+        updateUIState(State.READY)
     }
 
     private fun startRecording() {
@@ -58,11 +71,13 @@ class MainActivity : AppCompatActivity() {
             tempAudioFile = File.createTempFile("vrecorder_temp", ".m4a", cacheDir)
             
             mediaRecorder = MediaRecorder().apply {
+                // VOICE_COMMUNICATION provides built-in hardware-level noise suppression and 
+                // automatic gain control (AGC) for crisp, clear, attractive speech
                 setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(48000)
-                setAudioEncodingBitRate(256000)
+                setAudioSamplingRate(48000) // High quality 48kHz sampling
+                setAudioEncodingBitRate(256000) // High quality 256kbps bitrate
                 setOutputFile(tempAudioFile!!.absolutePath)
                 prepare()
                 start()
@@ -93,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         val file = tempAudioFile ?: return
         
         try {
+            // Auto-create app-specific Recordings folder in external storage
             val recordingsDir = File(getExternalFilesDir(Environment.DIRECTORY_RECORDINGS), "VRecorder")
             if (!recordingsDir.exists()) {
                 recordingsDir.mkdirs()
@@ -101,12 +117,14 @@ class MainActivity : AppCompatActivity() {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val finalFile = File(recordingsDir, "VRecorder_$timestamp.m4a")
 
+            // Copy temp file to final destination
             file.inputStream().use { input ->
                 finalFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
 
+            // Clean up temp file
             file.delete()
             tempAudioFile = null
 
@@ -125,21 +143,21 @@ class MainActivity : AppCompatActivity() {
         when (state) {
             State.READY -> {
                 binding.statusTextView.text = "Status: Ready"
-                binding.statusTextView.setTextColor(ContextCompat.getColor(this, android.R.color.white))
+                binding.statusTextView.setTextColor(colorWhite)
                 binding.recordButton.isEnabled = true
                 binding.stopButton.isEnabled = false
                 binding.saveButton.isEnabled = false
             }
             State.RECORDING -> {
                 binding.statusTextView.text = "Status: Recording... Read your story now."
-                binding.statusTextView.setTextColor(ContextCompat.getColor(this, R.color.neon_red)) // Using a standard red for recording
+                binding.statusTextView.setTextColor(colorRed)
                 binding.recordButton.isEnabled = false
                 binding.stopButton.isEnabled = true
                 binding.saveButton.isEnabled = false
             }
             State.STOPPED -> {
                 binding.statusTextView.text = "Status: Recording finished. Ready to save."
-                binding.statusTextView.setTextColor(ContextCompat.getColor(this, android.R.color.white))
+                binding.statusTextView.setTextColor(colorWhite)
                 binding.recordButton.isEnabled = true
                 binding.stopButton.isEnabled = false
                 binding.saveButton.isEnabled = true
