@@ -6,8 +6,9 @@
 
     <application
         android:allowBackup="true"
-        android:theme="@style/Theme.VRecorder"
-        tools:ignore="MissingApplicationIcon">
+        android:icon="@drawable/app"
+        android:roundIcon="@drawable/app"
+        android:theme="@style/Theme.VRecorder">
         
         <activity
             android:name=".MainActivity"
