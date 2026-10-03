@@ -1,3 +1,23 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.VRecorder" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.VRecorder" parent="Theme.Material3.Dark.NoActionBar">
+        <!-- Neon Blue Primary -->
+        <item name="colorPrimary">#00BFFF</item>
+        <item name="colorOnPrimary">#000000</item>
+        <item name="colorPrimaryContainer">#0055FF</item>
+        <item name="colorOnPrimaryContainer">#FFFFFF</item>
+        
+        <!-- Silver Secondary -->
+        <item name="colorSecondary">#C0C0C0</item>
+        <item name="colorOnSecondary">#000000</item>
+        
+        <!-- Black Background -->
+        <item name="colorSurface">#000000</item>
+        <item name="colorOnSurface">#FFFFFF</item>
+        <item name="colorSurfaceVariant">#121212</item>
+        <item name="colorOnSurfaceVariant">#E0E0E0</item>
+        
+        <!-- System Bars -->
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+    </style>
 </resources>
