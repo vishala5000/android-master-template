@@ -72,21 +72,10 @@
                 android:id="@+id/stopButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Stop"
+                android:text="Stop & Auto-Save"
                 android:enabled="false"
-                android:layout_marginEnd="8dp"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                app:strokeColor="#C0C0C0"
-                android:textColor="#C0C0C0" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/saveButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Save to Recordings"
-                android:enabled="false"
-                android:backgroundTint="#C0C0C0"
-                android:textColor="#000000" />
+                android:backgroundTint="#FF0000"
+                android:textColor="#FFFFFF" />
         </LinearLayout>
 
         <TextView
