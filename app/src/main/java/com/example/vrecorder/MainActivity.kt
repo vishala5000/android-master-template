@@ -20,7 +20,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var mediaRecorder: MediaRecorder? = null
     private var tempAudioFile: File? = null
-    private var isRecording = false
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -69,7 +68,6 @@ class MainActivity : AppCompatActivity() {
                 start()
             }
             
-            isRecording = true
             updateUIState(State.RECORDING)
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to start recording: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -84,7 +82,6 @@ class MainActivity : AppCompatActivity() {
                 release()
             }
             mediaRecorder = null
-            isRecording = false
             updateUIState(State.STOPPED)
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to stop recording", Toast.LENGTH_SHORT).show()
@@ -128,18 +125,21 @@ class MainActivity : AppCompatActivity() {
         when (state) {
             State.READY -> {
                 binding.statusTextView.text = "Status: Ready"
+                binding.statusTextView.setTextColor(ContextCompat.getColor(this, android.R.color.white))
                 binding.recordButton.isEnabled = true
                 binding.stopButton.isEnabled = false
                 binding.saveButton.isEnabled = false
             }
             State.RECORDING -> {
                 binding.statusTextView.text = "Status: Recording... Read your story now."
+                binding.statusTextView.setTextColor(ContextCompat.getColor(this, R.color.neon_red)) // Using a standard red for recording
                 binding.recordButton.isEnabled = false
                 binding.stopButton.isEnabled = true
                 binding.saveButton.isEnabled = false
             }
             State.STOPPED -> {
                 binding.statusTextView.text = "Status: Recording finished. Ready to save."
+                binding.statusTextView.setTextColor(ContextCompat.getColor(this, android.R.color.white))
                 binding.recordButton.isEnabled = true
                 binding.stopButton.isEnabled = false
                 binding.saveButton.isEnabled = true
