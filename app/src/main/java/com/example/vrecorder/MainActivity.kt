@@ -21,8 +21,6 @@ class MainActivity : AppCompatActivity() {
     private var mediaRecorder: MediaRecorder? = null
     private var tempAudioFile: File? = null
 
-    private val colorNeonBlue = 0xFF00BFFF.toInt()
-    private val colorSilver = 0xFFC0C0C0.toInt()
     private val colorWhite = 0xFFFFFFFF.toInt()
     private val colorRed = 0xFFFF0000.toInt()
 
@@ -32,7 +30,7 @@ class MainActivity : AppCompatActivity() {
         if (isGranted) {
             startRecording()
         } else {
-            Toast.makeText(this, "Microphone permission is required to record audio", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Microphone permission is required", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -40,7 +38,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         setupUI()
     }
 
@@ -53,21 +50,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.stopButton.setOnClickListener {
-            stopRecording()
-        }
-
-        binding.saveButton.setOnClickListener {
-            saveRecording()
-        }
-        
+        binding.stopButton.setOnClickListener { stopRecording() }
+        binding.saveButton.setOnClickListener { saveRecording() }
         updateUIState(State.READY)
     }
 
     private fun startRecording() {
         try {
             tempAudioFile = File.createTempFile("vrecorder_temp", ".m4a", cacheDir)
-            
             mediaRecorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -78,55 +68,37 @@ class MainActivity : AppCompatActivity() {
                 prepare()
                 start()
             }
-            
             updateUIState(State.RECORDING)
         } catch (e: Exception) {
-            Toast.makeText(this, "Failed to start recording: ${e.message}", Toast.LENGTH_SHORT).show()
-            e.printStackTrace()
+            Toast.makeText(this, "Failed to start: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun stopRecording() {
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            mediaRecorder?.apply { stop(); release() }
             mediaRecorder = null
             updateUIState(State.STOPPED)
         } catch (e: Exception) {
-            Toast.makeText(this, "Failed to stop recording", Toast.LENGTH_SHORT).show()
-            e.printStackTrace()
+            Toast.makeText(this, "Failed to stop", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun saveRecording() {
         val file = tempAudioFile ?: return
-        
         try {
-            val recordingsDir = File(getExternalFilesDir(Environment.DIRECTORY_RECORDINGS), "VRecorder")
-            if (!recordingsDir.exists()) {
-                recordingsDir.mkdirs()
-            }
-
+            val dir = File(getExternalFilesDir(Environment.DIRECTORY_RECORDINGS), "VRecorder")
+            if (!dir.exists()) dir.mkdirs()
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val finalFile = File(recordingsDir, "VRecorder_$timestamp.m4a")
-
-            file.inputStream().use { input ->
-                finalFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
+            val finalFile = File(dir, "VRecorder_$timestamp.m4a")
+            file.inputStream().use { input -> finalFile.outputStream().use { output -> input.copyTo(output) } }
             file.delete()
             tempAudioFile = null
-
-            binding.savedPathTextView.text = "Saved to: ${finalFile.absolutePath}"
-            Toast.makeText(this, "High-quality audio saved successfully!", Toast.LENGTH_LONG).show()
+            binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
+            Toast.makeText(this, "Audio saved!", Toast.LENGTH_LONG).show()
             updateUIState(State.READY)
         } catch (e: Exception) {
-            Toast.makeText(this, "Failed to save recording: ${e.message}", Toast.LENGTH_SHORT).show()
-            e.printStackTrace()
+            Toast.makeText(this, "Failed to save", Toast.LENGTH_SHORT).show()
         }
     }
 
