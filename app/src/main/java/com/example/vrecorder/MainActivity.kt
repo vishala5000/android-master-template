@@ -76,7 +76,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopRecording() {
         try {
-            mediaRecorder?.apply { stop(); release() }
+            mediaRecorder?.apply { 
+                stop()
+                release() 
+            }
             mediaRecorder = null
             updateUIState(State.STOPPED)
         } catch (e: Exception) {
@@ -86,19 +89,50 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveRecording() {
         val file = tempAudioFile ?: return
+
+        // Prevent crash if file is empty or missing
+        if (!file.exists() || file.length() == 0L) {
+            Toast.makeText(this, "Recording is empty", Toast.LENGTH_SHORT).show()
+            updateUIState(State.READY)
+            return
+        }
+
         try {
-            val dir = File(getExternalFilesDir(Environment.DIRECTORY_RECORDINGS), "VRecorder")
-            if (!dir.exists()) dir.mkdirs()
+            // Safely get directory. Falls back to internal filesDir if external is unmounted/null
+            val baseDir = getExternalFilesDir(Environment.DIRECTORY_RECORDINGS) ?: filesDir
+            val dir = File(baseDir, "VRecorder")
+
+            if (!dir.exists()) {
+                val created = dir.mkdirs()
+                if (!created && !dir.exists()) {
+                    throw Exception("Failed to create folder")
+                }
+            }
+
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val finalFile = File(dir, "VRecorder_$timestamp.m4a")
-            file.inputStream().use { input -> finalFile.outputStream().use { output -> input.copyTo(output) } }
-            file.delete()
-            tempAudioFile = null
-            binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
-            Toast.makeText(this, "Audio saved!", Toast.LENGTH_LONG).show()
+
+            // Copy file safely
+            file.inputStream().use { input ->
+                finalFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            // Verify copy was successful before deleting temp
+            if (finalFile.exists() && finalFile.length() > 0) {
+                file.delete()
+                tempAudioFile = null
+                binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
+                Toast.makeText(this, "Audio saved successfully!", Toast.LENGTH_LONG).show()
+            } else {
+                throw Exception("File copy failed")
+            }
+
             updateUIState(State.READY)
         } catch (e: Exception) {
-            Toast.makeText(this, "Failed to save", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
