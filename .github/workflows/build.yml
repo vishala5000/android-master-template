@@ -21,7 +21,9 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        # This action automatically installs Gradle globally, so we don't need gradlew
+        with:
+          # CRITICAL FIX: Pin to Gradle 8.4. Gradle 9.x is incompatible with Android Gradle Plugin.
+          gradle-version: '8.4'
 
       - name: Generate Auto-Sign Keystore
         run: |
@@ -30,7 +32,6 @@ jobs:
 
       - name: Build & Auto-Sign Release APK
         run: |
-          # FIX: Changed './gradlew' to 'gradle' to use the globally installed version
           gradle assembleRelease --no-daemon \
             -Pandroid.injected.signing.store.file=$(pwd)/auto.jks \
             -Pandroid.injected.signing.store.password=auto123 \
