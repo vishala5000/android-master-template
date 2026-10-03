@@ -7,7 +7,6 @@ on:
 
 jobs:
   build:
-    # ubuntu-latest is the most stable for Android builds
     runs-on: ubuntu-latest 
 
     steps:
@@ -22,10 +21,7 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        # CRITICAL FIX: Removed 'gradle-version' so it safely uses your project's wrapper
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        # This action automatically installs Gradle globally, so we don't need gradlew
 
       - name: Generate Auto-Sign Keystore
         run: |
@@ -34,8 +30,8 @@ jobs:
 
       - name: Build & Auto-Sign Release APK
         run: |
-          # CRITICAL FIX: Changed 'gradle' to './gradlew'
-          ./gradlew assembleRelease --no-daemon \
+          # FIX: Changed './gradlew' to 'gradle' to use the globally installed version
+          gradle assembleRelease --no-daemon \
             -Pandroid.injected.signing.store.file=$(pwd)/auto.jks \
             -Pandroid.injected.signing.store.password=auto123 \
             -Pandroid.injected.signing.key.alias=auto \
@@ -43,7 +39,6 @@ jobs:
 
       - name: Find and Prepare APK
         run: |
-          # CRITICAL FIX: Pointed directly to the release folder to avoid picking up debug APKs
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           mkdir -p ./output
           cp "$APK" ./output/app-release.apk
