@@ -3,6 +3,7 @@ package com.example.vrecorder
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
@@ -23,14 +24,24 @@ class MainActivity : AppCompatActivity() {
 
     private val colorWhite = 0xFFFFFFFF.toInt()
     private val colorRed = 0xFFFF0000.toInt()
+    private val colorNeonBlue = 0xFF00BFFF.toInt()
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
+    // Launcher for Multiple Permissions (Mic + Storage)
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
+        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions[Manifest.permission.READ_MEDIA_AUDIO] == true
+        } else {
+            permissions[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true
+        }
+
+        if (micGranted && storageGranted) {
             startRecording()
         } else {
-            Toast.makeText(this, "Microphone permission is required", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Mic and Storage permissions are required", Toast.LENGTH_LONG).show()
+            updateUIState(State.READY)
         }
     }
 
@@ -43,16 +54,37 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUI() {
         binding.recordButton.setOnClickListener {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            if (hasAllPermissions()) {
                 startRecording()
             } else {
-                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                requestPermissions()
             }
         }
 
         binding.stopButton.setOnClickListener { stopRecording() }
-        binding.saveButton.setOnClickListener { saveRecording() }
+        
         updateUIState(State.READY)
+    }
+
+    private fun hasAllPermissions(): Boolean {
+        val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+        return micGranted && storageGranted
+    }
+
+    private fun requestPermissions() {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        requestPermissionsLauncher.launch(permissions.toTypedArray())
     }
 
     private fun startRecording() {
@@ -62,9 +94,9 @@ class MainActivity : AppCompatActivity() {
                 setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioChannels(1) // Mono prevents channel-mapping crashes on some devices
-                setAudioSamplingRate(44100) // 44.1kHz is universally supported
-                setAudioEncodingBitRate(128000) // 128kbps is safe and high quality for voice
+                setAudioChannels(1) 
+                setAudioSamplingRate(44100) 
+                setAudioEncodingBitRate(128000) 
                 setOutputFile(tempAudioFile!!.absolutePath)
                 prepare()
                 start()
@@ -74,6 +106,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Failed to start: ${e.message}", Toast.LENGTH_SHORT).show()
             mediaRecorder?.release()
             mediaRecorder = null
+            updateUIState(State.READY)
         }
     }
 
@@ -81,36 +114,33 @@ class MainActivity : AppCompatActivity() {
         try {
             mediaRecorder?.apply { 
                 stop()
-                reset() // CRITICAL: Prevents native C++ state machine crashes
+                reset() 
                 release() 
             }
             mediaRecorder = null
-            updateUIState(State.STOPPED)
+            
+            // Automatically trigger save
+            updateUIState(State.SAVING)
+            saveRecording()
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to stop", Toast.LENGTH_SHORT).show()
             mediaRecorder?.release()
             mediaRecorder = null
+            updateUIState(State.READY)
         }
     }
 
     private fun saveRecording() {
         val file = tempAudioFile ?: return
 
-        // Prevent crash if file is empty or missing
         if (!file.exists() || file.length() == 0L) {
             Toast.makeText(this, "Recording is empty", Toast.LENGTH_SHORT).show()
             updateUIState(State.READY)
             return
         }
 
-        // Show loading state
-        binding.saveButton.isEnabled = false
-        binding.saveButton.text = "Saving..."
-
-        // CRITICAL FIX: Run file operations on a background thread to prevent ANR (App Not Responding) crashes
         Thread {
             try {
-                // Small delay to ensure OS releases file lock after MediaRecorder.release()
                 Thread.sleep(200)
 
                 val baseDir = getExternalFilesDir(Environment.DIRECTORY_RECORDINGS) ?: filesDir
@@ -123,22 +153,19 @@ class MainActivity : AppCompatActivity() {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val finalFile = File(dir, "VRecorder_$timestamp.m4a")
 
-                // Copy file safely using FileChannel
                 file.inputStream().channel.use { inputChannel ->
                     finalFile.outputStream().channel.use { outputChannel ->
                         inputChannel.transferTo(0, inputChannel.size(), outputChannel)
                     }
                 }
 
-                // Verify copy was successful before deleting temp
                 if (finalFile.exists() && finalFile.length() > 0) {
                     file.delete()
                     tempAudioFile = null
                     
-                    // Update UI on the main thread
                     runOnUiThread {
                         binding.savedPathTextView.text = "Saved: ${finalFile.absolutePath}"
-                        Toast.makeText(this, "Audio saved successfully!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "Audio auto-saved successfully!", Toast.LENGTH_LONG).show()
                         updateUIState(State.READY)
                     }
                 } else {
@@ -148,13 +175,13 @@ class MainActivity : AppCompatActivity() {
                 e.printStackTrace()
                 runOnUiThread {
                     Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    updateUIState(State.STOPPED) // Re-enable save button if it failed
+                    updateUIState(State.READY)
                 }
             }
         }.start()
     }
 
-    private enum class State { READY, RECORDING, STOPPED }
+    private enum class State { READY, RECORDING, SAVING }
 
     private fun updateUIState(state: State) {
         when (state) {
@@ -162,24 +189,20 @@ class MainActivity : AppCompatActivity() {
                 binding.statusTextView.text = "Status: Ready"
                 binding.statusTextView.setTextColor(colorWhite)
                 binding.recordButton.isEnabled = true
+                binding.recordButton.text = "Start Recording"
                 binding.stopButton.isEnabled = false
-                binding.saveButton.isEnabled = false
-                binding.saveButton.text = "Save to Recordings"
             }
             State.RECORDING -> {
                 binding.statusTextView.text = "Status: Recording... Read your story now."
                 binding.statusTextView.setTextColor(colorRed)
                 binding.recordButton.isEnabled = false
                 binding.stopButton.isEnabled = true
-                binding.saveButton.isEnabled = false
             }
-            State.STOPPED -> {
-                binding.statusTextView.text = "Status: Recording finished. Ready to save."
-                binding.statusTextView.setTextColor(colorWhite)
-                binding.recordButton.isEnabled = true
+            State.SAVING -> {
+                binding.statusTextView.text = "Status: Saving audio..."
+                binding.statusTextView.setTextColor(colorNeonBlue)
+                binding.recordButton.isEnabled = false
                 binding.stopButton.isEnabled = false
-                binding.saveButton.isEnabled = true
-                binding.saveButton.text = "Save to Recordings"
             }
         }
     }
