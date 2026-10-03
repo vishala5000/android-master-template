@@ -3,7 +3,6 @@ package com.example.vrecorder
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
-import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
@@ -26,21 +25,14 @@ class MainActivity : AppCompatActivity() {
     private val colorRed = 0xFFFF0000.toInt()
     private val colorNeonBlue = 0xFF00BFFF.toInt()
 
-    // Launcher for Multiple Permissions (Mic + Storage)
-    private val requestPermissionsLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
-        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions[Manifest.permission.READ_MEDIA_AUDIO] == true
-        } else {
-            permissions[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true
-        }
-
-        if (micGranted && storageGranted) {
+    // ONLY request Microphone permission
+    private val requestMicPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
             startRecording()
         } else {
-            Toast.makeText(this, "Mic and Storage permissions are required", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Microphone permission is required to record", Toast.LENGTH_LONG).show()
             updateUIState(State.READY)
         }
     }
@@ -54,37 +46,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUI() {
         binding.recordButton.setOnClickListener {
-            if (hasAllPermissions()) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 startRecording()
             } else {
-                requestPermissions()
+                requestMicPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
 
         binding.stopButton.setOnClickListener { stopRecording() }
-        
         updateUIState(State.READY)
-    }
-
-    private fun hasAllPermissions(): Boolean {
-        val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        }
-        return micGranted && storageGranted
-    }
-
-    private fun requestPermissions() {
-        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
-        } else {
-            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        requestPermissionsLauncher.launch(permissions.toTypedArray())
     }
 
     private fun startRecording() {
@@ -119,7 +89,6 @@ class MainActivity : AppCompatActivity() {
             }
             mediaRecorder = null
             
-            // Automatically trigger save
             updateUIState(State.SAVING)
             saveRecording()
         } catch (e: Exception) {
@@ -143,6 +112,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 Thread.sleep(200)
 
+                // App-specific directory: NO STORAGE PERMISSIONS REQUIRED!
                 val baseDir = getExternalFilesDir(Environment.DIRECTORY_RECORDINGS) ?: filesDir
                 val dir = File(baseDir, "VRecorder")
 
