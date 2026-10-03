@@ -1,8 +1,3 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.Timer" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#6200EE</item>
-        <item name="colorPrimaryVariant">#3700B3</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-    </style>
+    <style name="Theme.VRecorder" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>
