@@ -59,13 +59,11 @@ class MainActivity : AppCompatActivity() {
             tempAudioFile = File.createTempFile("vrecorder_temp", ".m4a", cacheDir)
             
             mediaRecorder = MediaRecorder().apply {
-                // VOICE_COMMUNICATION provides built-in hardware-level noise suppression and 
-                // automatic gain control (AGC) for crisp, clear, attractive speech without extra libraries
                 setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(48000) // High quality 48kHz sampling
-                setAudioEncodingBitRate(256000) // High quality 256kbps bitrate
+                setAudioSamplingRate(48000)
+                setAudioEncodingBitRate(256000)
                 setOutputFile(tempAudioFile!!.absolutePath)
                 prepare()
                 start()
@@ -98,7 +96,6 @@ class MainActivity : AppCompatActivity() {
         val file = tempAudioFile ?: return
         
         try {
-            // Auto-create app-specific Recordings folder in internal/external storage
             val recordingsDir = File(getExternalFilesDir(Environment.DIRECTORY_RECORDINGS), "VRecorder")
             if (!recordingsDir.exists()) {
                 recordingsDir.mkdirs()
@@ -107,14 +104,12 @@ class MainActivity : AppCompatActivity() {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val finalFile = File(recordingsDir, "VRecorder_$timestamp.m4a")
 
-            // Copy temp file to final destination
             file.inputStream().use { input ->
                 finalFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
 
-            // Clean up temp file
             file.delete()
             tempAudioFile = null
 
