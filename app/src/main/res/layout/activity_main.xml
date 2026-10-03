@@ -2,107 +2,88 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:padding="16dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp"
         android:gravity="center_horizontal">
 
         <TextView
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="YouTube Countdown Generator"
-            android:textSize="22sp"
+            android:text="Enter your story text below and read it aloud:"
+            android:textSize="18sp"
             android:textStyle="bold"
-            android:gravity="center"
-            android:layout_marginBottom="24dp" />
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Story Text"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/storyEditText"
+                android:layout_width="match_parent"
+                android:layout_height="200dp"
+                android:gravity="top|start"
+                android:inputType="textMultiLine" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:id="@+id/statusTextView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Status: Ready"
+            android:textSize="16sp"
+            android:textColor="@android:color/darker_gray"
+            android:layout_marginBottom="16dp"
+            android:gravity="center" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center">
+            android:gravity="center"
+            android:layout_marginBottom="16dp">
 
-            <EditText
-                android:id="@+id/etHours"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/recordButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:hint="Hrs"
-                android:inputType="number"
-                android:text="0"
-                android:gravity="center" />
+                android:text="Start Recording"
+                android:layout_marginEnd="8dp" />
 
-            <EditText
-                android:id="@+id/etMinutes"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stopButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:hint="Mins"
-                android:inputType="number"
-                android:text="10"
-                android:gravity="center" />
+                android:text="Stop"
+                android:enabled="false"
+                android:layout_marginEnd="8dp"
+                style="@style/Widget.Material3.Button.OutlinedButton" />
 
-            <EditText
-                android:id="@+id/etSeconds"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/saveButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:hint="Secs"
-                android:inputType="number"
-                android:text="0"
-                android:gravity="center" />
+                android:text="Save to Recordings"
+                android:enabled="false" />
         </LinearLayout>
 
-        <CheckBox
-            android:id="@+id/cbBackground"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Use Custom Background Image"
-            android:layout_marginTop="16dp" />
-
-        <Button
-            android:id="@+id/btnPickImage"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Pick Background Image"
-            android:enabled="false"
-            android:layout_marginTop="8dp" />
-
-        <Button
-            android:id="@+id/btnGenerate"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Generate 1080p Video"
-            android:layout_marginTop="24dp" />
-
-        <ProgressBar
-            android:id="@+id/progressBar"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:max="100"
-            android:visibility="gone" />
-
         <TextView
-            android:id="@+id/tvStatus"
+            android:id="@+id/savedPathTextView"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Ready to generate"
+            android:text=""
+            android:textSize="14sp"
+            android:textColor="@android:color/holo_green_dark"
             android:gravity="center"
             android:layout_marginTop="8dp" />
-
-        <Button
-            android:id="@+id/btnDownload"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Save to Timer Folder"
-            android:layout_marginTop="16dp"
-            android:visibility="gone" />
 
     </LinearLayout>
 </ScrollView>
