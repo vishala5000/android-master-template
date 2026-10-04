@@ -36,7 +36,6 @@ task downloadReleaseAssets {
     }
 }
 
-// Ensure assets are downloaded before the build starts
 preBuild.dependsOn downloadReleaseAssets
 
 android {
@@ -55,6 +54,9 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // CRITICAL: Auto-signs the release build using the default debug keystore.
+            // This guarantees a signed APK without requiring any GitHub Secrets.
+            signingConfig signingConfigs.debug
         }
     }
     
@@ -74,6 +76,6 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // Official community-maintained drop-in replacement for FFmpegKit (resolves Maven Central removal)
+    // Official community-maintained drop-in replacement for FFmpegKit
     implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7'
 }
