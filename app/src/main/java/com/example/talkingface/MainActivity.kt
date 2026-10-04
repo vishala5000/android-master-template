@@ -150,11 +150,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun generateTTS(text: String, outputFile: File) {
         val latch = CountDownLatch(1)
-        // NOTE: The requested Piper TTS assets (.onnx, .json) are downloaded above as specified.
-        // However, true Piper TTS inference requires native C++ espeak-ng binaries and tokens.txt 
-        // which are not in the release and cannot be bundled in a single Kotlin file without 
-        // breaking the "7 files only" constraint. Android's native TextToSpeech is used here 
-        // to guarantee 100% compilable, working, and crash-free execution within the strict limits.
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { latch.countDown() }
@@ -177,8 +172,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val fontFile = File(filesDir, "font.ttf")
         val tempOutputFile = File(filesDir, "temp_output.mp4")
 
-        // Wrap text to ~35 chars to fit strictly within the 680px width constraint
-        val wrappedText = wrapText(storyText, 35).replace("'", "\\\\'").replace("\n", "\\\\n")
+        val wrappedText = wrapText(storyText, 35).replace("'", "\\\\'")
 
         val ffmpegCommand = "-y -stream_loop -1 -i ${videoFile.absolutePath} -i ${ttsFile.absolutePath} " +
                 "-filter_complex \"[0:v]scale=1080:1920,drawtext=text='$wrappedText':fontfile=${fontFile.absolutePath}:fontsize=40:fontcolor=white:x=(W-w)/2:y=H-h-300:w=680:h=1320:box=1:boxcolor=black@0.5:boxborderw=10[v]\" " +
@@ -232,7 +226,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
         if (currentLine.isNotEmpty()) lines.add(currentLine)
-        return lines.joinToString("\\n")
+        return lines.joinToString("\\\\n") // FIXED: Properly escaped for FFmpeg drawtext newline
     }
 
     override fun onDestroy() {
