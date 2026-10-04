@@ -17,6 +17,10 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
+import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -28,12 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnGenerate: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var tvStatus: TextView
-    private lateinit var piperTts: PiperTtsHelper
-
-    private val filesToCopy = listOf(
-        "talkingface.mp4",
-        "font.ttf"
-    )
+    private var tts: OfflineTts? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,8 +43,6 @@ class MainActivity : AppCompatActivity() {
         btnGenerate = findViewById(R.id.btnGenerate)
         progressBar = findViewById(R.id.progressBar)
         tvStatus = findViewById(R.id.tvStatus)
-
-        piperTts = PiperTtsHelper(this)
 
         btnGenerate.setOnClickListener {
             val speechText = etSpeechText.text.toString().trim()
@@ -100,22 +97,14 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             try {
-                // Copy video + font from APK assets to internal storage
-                for (fileName in filesToCopy) {
-                    val dest = File(filesDir, fileName)
-                    if (!dest.exists()) {
-                        assets.open(fileName).use { input ->
-                            FileOutputStream(dest).use { output -> input.copyTo(output) }
-                        }
-                    }
-                }
-
+                copyAssetsToInternalStorage()
+                
                 runOnUiThread { tvStatus.text = "Initializing Piper TTS..." }
-                piperTts.initialize()
+                initializePiperTts()
 
                 runOnUiThread { tvStatus.text = "Generating speech with Piper..." }
                 val ttsFile = File(filesDir, "piper_output.wav")
-                piperTts.generateSpeech(speechText, ttsFile)
+                tts?.generate(text = speechText, sid = 0, speed = 1.0f)?.save(ttsFile.absolutePath)
 
                 runOnUiThread { tvStatus.text = "Rendering video (this may take a minute)..." }
                 renderVideo(overlayText, ttsFile)
@@ -127,8 +116,60 @@ class MainActivity : AppCompatActivity() {
                     btnGenerate.isEnabled = true
                     progressBar.visibility = ProgressBar.GONE
                 }
+                tts?.release()
             }
         }.start()
+    }
+
+    private fun copyAssetsToInternalStorage() {
+        val filesDir = this.filesDir
+        val assetsToCopy = listOf("en_US-ljspeech-medium.onnx", "tokens.txt", "talkingface.mp4", "font.ttf")
+        for (fileName in assetsToCopy) {
+            val dest = File(filesDir, fileName)
+            if (!dest.exists()) {
+                assets.open(fileName).use { input ->
+                    FileOutputStream(dest).use { output -> input.copyTo(output) }
+                }
+            }
+        }
+        copyAssetFolder("espeak-ng-data", File(filesDir, "espeak-ng-data"))
+    }
+
+    private fun copyAssetFolder(assetPath: String, destDir: File) {
+        destDir.mkdirs()
+        val entries = assets.list(assetPath) ?: return
+        for (entry in entries) {
+            val subPath = "$assetPath/$entry"
+            val subEntries = assets.list(subPath)
+            if (subEntries != null && subEntries.isNotEmpty()) {
+                copyAssetFolder(subPath, File(destDir, entry))
+            } else {
+                val destFile = File(destDir, entry)
+                if (!destFile.exists()) {
+                    assets.open(subPath).use { input ->
+                        FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun initializePiperTts() {
+        val filesDir = this.filesDir
+        val config = OfflineTtsConfig(
+            model = OfflineTtsModelConfig(
+                vits = OfflineTtsVitsModelConfig(
+                    model = File(filesDir, "en_US-ljspeech-medium.onnx").absolutePath,
+                    tokens = File(filesDir, "tokens.txt").absolutePath,
+                    dataDir = filesDir.absolutePath, // Must point to folder containing espeak-ng-data
+                    lengthScale = 1.0f
+                ),
+                numThreads = 2,
+                debug = false,
+                provider = "cpu"
+            )
+        )
+        tts = OfflineTts(config = config)
     }
 
     private fun renderVideo(overlayText: String, ttsFile: File) {
@@ -153,6 +194,7 @@ class MainActivity : AppCompatActivity() {
                     tvStatus.text = "FFmpeg failed: ${session.failStackTrace}"
                 }
                 btnGenerate.isEnabled = true
+                tts?.release()
             }
         }, { _ -> }, { stat ->
             runOnUiThread { tvStatus.text = "Rendering... ${stat.time}" }
@@ -187,10 +229,5 @@ class MainActivity : AppCompatActivity() {
         }
         if (currentLine.isNotEmpty()) lines.add(currentLine)
         return lines.joinToString("\\\\n")
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        piperTts.release()
     }
 }
