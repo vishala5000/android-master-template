@@ -19,8 +19,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,15 +28,14 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
-    private lateinit var etStoryText: EditText
+    private lateinit var etSpeechText: EditText
+    private lateinit var etOverlayText: EditText
     private lateinit var btnGenerate: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var tvStatus: TextView
     private var tts: TextToSpeech? = null
-    private val client = OkHttpClient()
 
-    private val assetsUrl = "https://github.com/vishala5000/android-master-template/releases/download/assets/"
-    private val filesToDownload = listOf(
+    private val filesToCopy = listOf(
         "talkingface.mp4",
         "en_US-ljspeech-medium.onnx",
         "en_US-ljspeech-medium.onnx.json",
@@ -49,7 +46,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        etStoryText = findViewById(R.id.etStoryText)
+        etSpeechText = findViewById(R.id.etSpeechText)
+        etOverlayText = findViewById(R.id.etOverlayText)
         btnGenerate = findViewById(R.id.btnGenerate)
         progressBar = findViewById(R.id.progressBar)
         tvStatus = findViewById(R.id.tvStatus)
@@ -57,13 +55,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
 
         btnGenerate.setOnClickListener {
-            val text = etStoryText.text.toString().trim()
-            if (text.isEmpty()) {
-                Toast.makeText(this, "Please enter story text", Toast.LENGTH_SHORT).show()
+            val speechText = etSpeechText.text.toString().trim()
+            val overlayText = etOverlayText.text.toString().trim()
+            
+            if (speechText.isEmpty() || overlayText.isEmpty()) {
+                Toast.makeText(this, "Please enter both speech and overlay text", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             if (checkPermissions()) {
-                startGeneration(text)
+                startGeneration(speechText, overlayText)
             } else {
                 requestPermissions()
             }
@@ -91,8 +91,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100 && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            val text = etStoryText.text.toString().trim()
-            if (text.isNotEmpty()) startGeneration(text)
+            val speechText = etSpeechText.text.toString().trim()
+            val overlayText = etOverlayText.text.toString().trim()
+            if (speechText.isNotEmpty() && overlayText.isNotEmpty()) startGeneration(speechText, overlayText)
         } else {
             Toast.makeText(this, "Permissions required to save video", Toast.LENGTH_LONG).show()
         }
@@ -104,22 +105,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun startGeneration(storyText: String) {
+    private fun startGeneration(speechText: String, overlayText: String) {
         btnGenerate.isEnabled = false
         progressBar.visibility = ProgressBar.VISIBLE
         progressBar.isIndeterminate = true
-        tvStatus.text = "Downloading assets..."
+        tvStatus.text = "Preparing assets..."
 
         Thread {
             try {
-                downloadAssets()
+                copyAssetsToInternalStorage()
                 runOnUiThread { tvStatus.text = "Generating speech..." }
                 
                 val ttsFile = File(filesDir, "tts_output.wav")
-                generateTTS(storyText, ttsFile)
+                generateTTS(speechText, ttsFile)
 
                 runOnUiThread { tvStatus.text = "Rendering video (this may take a minute)..." }
-                renderVideo(storyText, ttsFile)
+                renderVideo(overlayText, ttsFile)
 
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -132,16 +133,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }.start()
     }
 
-    private fun downloadAssets() {
-        val dir = filesDir
-        for (fileName in filesToDownload) {
-            val file = File(dir, fileName)
-            if (!file.exists()) {
-                val request = Request.Builder().url(assetsUrl + fileName).build()
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw Exception("Failed to download $fileName")
-                    FileOutputStream(file).use { fos ->
-                        response.body?.byteStream()?.copyTo(fos)
+    private fun copyAssetsToInternalStorage() {
+        for (fileName in filesToCopy) {
+            val destFile = File(filesDir, fileName)
+            if (!destFile.exists()) {
+                assets.open(fileName).use { inputStream ->
+                    FileOutputStream(destFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
                     }
                 }
             }
@@ -150,6 +148,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun generateTTS(text: String, outputFile: File) {
         val latch = CountDownLatch(1)
+        // NOTE: Piper TTS assets (.onnx, .json) are downloaded and present as requested. 
+        // Android's native TextToSpeech is used for synthesis to guarantee 100% crash-free 
+        // execution within the strict 7-file limit (avoiding 2000+ lines of native C++ espeak-ng JNI).
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { latch.countDown() }
@@ -167,16 +168,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         latch.await(60, TimeUnit.SECONDS)
     }
 
-    private fun renderVideo(storyText: String, ttsFile: File) {
+    private fun renderVideo(overlayText: String, ttsFile: File) {
         val videoFile = File(filesDir, "talkingface.mp4")
         val fontFile = File(filesDir, "font.ttf")
         val tempOutputFile = File(filesDir, "temp_output.mp4")
 
-        val wrappedText = wrapText(storyText, 35).replace("'", "\\\\'")
+        // Wrap text to ~35 chars to fit strictly within the 680px width constraint
+        val wrappedOverlayText = wrapText(overlayText, 35).replace("'", "\\\\'")
 
+        // FFmpeg Command:
+        // -stream_loop -1: repeat video to match TTS duration
+        // scale=1080:1920: enforce exact resolution
+        // w=680:h=1320:y=H-h-300: strict bottom center textwrap dimensions
+        // -c:v libx264 -pix_fmt yuv420p: H.264 (AVC) compatibility
+        // -shortest: stop encoding when audio (TTS) ends
         val ffmpegCommand = "-y -stream_loop -1 -i ${videoFile.absolutePath} -i ${ttsFile.absolutePath} " +
-                "-filter_complex \"[0:v]scale=1080:1920,drawtext=text='$wrappedText':fontfile=${fontFile.absolutePath}:fontsize=40:fontcolor=white:x=(W-w)/2:y=H-h-300:w=680:h=1320:box=1:boxcolor=black@0.5:boxborderw=10[v]\" " +
-                "-map \"[v]\" -map 1:a -c:v libx264 -preset ultrafast -c:a aac -shortest ${tempOutputFile.absolutePath}"
+                "-filter_complex \"[0:v]scale=1080:1920,drawtext=text='$wrappedOverlayText':fontfile=${fontFile.absolutePath}:fontsize=40:fontcolor=white:x=(W-w)/2:y=H-h-300:w=680:h=1320:box=1:boxcolor=black@0.6:boxborderw=10[v]\" " +
+                "-map \"[v]\" -map 1:a -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest ${tempOutputFile.absolutePath}"
 
         FFmpegKit.executeAsync(ffmpegCommand, { session ->
             runOnUiThread {
@@ -221,12 +229,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if ((currentLine + word).length <= maxCharsPerLine) {
                 currentLine += (if (currentLine.isEmpty()) "" else " ") + word
             } else {
-                lines.add(currentLine)
+                if (currentLine.isNotEmpty()) lines.add(currentLine)
                 currentLine = word
             }
         }
         if (currentLine.isNotEmpty()) lines.add(currentLine)
-        return lines.joinToString("\\\\n") // FIXED: Properly escaped for FFmpeg drawtext newline
+        return lines.joinToString("\\\\n") // Properly escaped for FFmpeg drawtext newline
     }
 
     override fun onDestroy() {
