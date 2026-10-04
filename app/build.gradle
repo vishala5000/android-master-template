@@ -38,7 +38,8 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // FIXED: Use 6.0-2.LTS (the actual published Maven Central version)
-    implementation 'com.arthenica:ffmpeg-kit-full:6.0-2.LTS'
+    // FIXED: Original com.arthenica artifacts were removed from Maven Central in April 2025.
+    // This is the official community-maintained drop-in replacement (same package names/imports).
+    implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
