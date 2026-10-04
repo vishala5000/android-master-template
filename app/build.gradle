@@ -37,8 +37,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    // FFmpeg for video looping, scaling, and text overlay
-    implementation 'com.arthenica:ffmpeg-kit-full:6.0-2'
-    // OkHttp for downloading assets from GitHub releases
+    
+    // FIXED: Use 6.0-2.LTS (the actual published Maven Central version)
+    implementation 'com.arthenica:ffmpeg-kit-full:6.0-2.LTS'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
