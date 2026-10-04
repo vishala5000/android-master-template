@@ -5,41 +5,28 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-// Robust download function that follows redirects
+// Robust download with redirect handling
 def downloadFile(String urlString, File destFile) {
     def maxRedirects = 5
     def currentUrl = new URL(urlString)
-    
     for (int i = 0; i < maxRedirects; i++) {
         HttpURLConnection connection = (HttpURLConnection) currentUrl.openConnection()
         connection.setInstanceFollowRedirects(true)
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
         connection.setConnectTimeout(30000)
-        connection.setReadTimeout(60000)
-        
+        connection.setReadTimeout(120000)
         int responseCode = connection.getResponseCode()
-        
-        if (responseCode == HttpURLConnection.HTTP_MOVED_PERM ||
-            responseCode == HttpURLConnection.HTTP_MOVED_TEMP ||
-            responseCode == 307 || responseCode == 308) {
-            String newUrl = connection.getHeaderField("Location")
-            println "  Redirecting to: $newUrl"
-            currentUrl = new URL(newUrl)
+        if (responseCode == 301 || responseCode == 302 || responseCode == 307 || responseCode == 308) {
+            currentUrl = new URL(connection.getHeaderField("Location"))
             connection.disconnect()
             continue
         }
-        
         if (responseCode != 200) {
             connection.disconnect()
-            throw new RuntimeException("Failed to download $urlString: HTTP $responseCode")
+            throw new RuntimeException("HTTP $responseCode for $urlString")
         }
-        
         destFile.parentFile.mkdirs()
-        destFile.withOutputStream { out ->
-            connection.inputStream.with { input ->
-                out << input
-            }
-        }
+        destFile.withOutputStream { out -> connection.inputStream.with { input -> out << input } }
         connection.disconnect()
         println "  ✓ Downloaded ${destFile.name} (${destFile.length()} bytes)"
         return
@@ -47,61 +34,77 @@ def downloadFile(String urlString, File destFile) {
     throw new RuntimeException("Too many redirects for $urlString")
 }
 
-// Task to download assets from GitHub release during the build process
-task downloadReleaseAssets {
-    def assetDir = file("$projectDir/src/main/assets")
-    outputs.dir(assetDir)
-    
-    def filesToDownload = [
-        "talkingface.mp4",
-        "en_US-ljspeech-medium.onnx",
-        "en_US-ljspeech-medium.onnx.json",
-        "font.ttf"
-    ]
-    def baseUrl = "https://github.com/vishala5000/android-master-template/releases/download/assets/"
-    
+// Download sherpa-onnx Android AAR (contains Piper TTS engine + native libs)
+task downloadSherpaOnnx {
+    def libsDir = file("$projectDir/libs")
+    def aarFile = file("$libsDir/sherpa-onnx.aar")
+    outputs.file(aarFile)
     doLast {
-        assetDir.mkdirs()
-        println "=== Downloading Release Assets ==="
-        println "Destination: ${assetDir.absolutePath}"
-        
-        filesToDownload.each { fileName ->
-            def destFile = file("$assetDir/$fileName")
-            if (!destFile.exists() || destFile.length() == 0) {
-                println "Downloading: $fileName"
-                try {
-                    downloadFile(baseUrl + fileName, destFile)
-                } catch (Exception e) {
-                    println "  ✗ ERROR downloading $fileName: ${e.message}"
-                    throw e
+        if (!aarFile.exists()) {
+            libsDir.mkdirs()
+            println "=== Downloading sherpa-onnx AAR ==="
+            // sherpa-onnx publishes Android AAR in their releases
+            downloadFile(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.10.31/sherpa-onnx-v1.10.31-android.tar.bz2",
+                file("$buildDir/sherpa-onnx.tar.bz2")
+            )
+            println "=== Extracting AAR ==="
+            copy {
+                from(tarTree(resources.bzip2(file("$buildDir/sherpa-onnx.tar.bz2")))) {
+                    include '**/*.aar'
+                    include '**/*.so'
+                    eachFile { details ->
+                        // Flatten: keep only filename
+                        details.path = details.name
+                    }
+                    includeEmptyDirs = false
                 }
-            } else {
-                println "✓ $fileName already exists (${destFile.length()} bytes), skipping."
+                into libsDir
             }
-        }
-        
-        // Verify all files are present
-        println "=== Verifying Assets ==="
-        filesToDownload.each { fileName ->
-            def f = file("$assetDir/$fileName")
-            if (!f.exists()) {
-                throw new RuntimeException("MISSING ASSET: $fileName was not downloaded!")
+            // Rename whatever .aar we got to sherpa-onnx.aar
+            def foundAar = libsDir.listFiles().find { it.name.endsWith('.aar') }
+            if (foundAar && foundAar.name != 'sherpa-onnx.aar') {
+                foundAar.renameTo(aarFile)
             }
-            println "✓ Verified: $fileName (${f.length()} bytes)"
+            if (!aarFile.exists()) throw new RuntimeException("AAR not found after extraction")
+            println "✓ sherpa-onnx.aar ready"
         }
-        println "=== All Assets Ready ==="
     }
 }
 
-// CRITICAL: Ensure assets are downloaded BEFORE Android processes them
-tasks.configureEach { task ->
-    if (task.name.startsWith('merge') && task.name.contains('Assets')) {
-        task.dependsOn downloadReleaseAssets
-    }
-    if (task.name == 'preBuild') {
-        task.dependsOn downloadReleaseAssets
+// Download Piper model (includes .onnx, tokens.txt, AND espeak-ng-data)
+task downloadPiperModel {
+    def assetDir = file("$projectDir/src/main/assets")
+    def modelFile = file("$assetDir/en_US-ljspeech-medium.onnx")
+    outputs.file(modelFile)
+    doLast {
+        if (!modelFile.exists()) {
+            assetDir.mkdirs()
+            println "=== Downloading Piper model (with espeak-ng-data) ==="
+            downloadFile(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ljspeech-medium.tar.bz2",
+                file("$buildDir/piper-model.tar.bz2")
+            )
+            println "=== Extracting model ==="
+            copy {
+                from(tarTree(resources.bzip2(file("$buildDir/piper-model.tar.bz2")))) {
+                    eachFile { details ->
+                        // Flatten top-level folder, keep espeak-ng-data structure
+                        def parts = details.path.split('/')
+                        if (parts.length > 1 && parts[0] == 'vits-piper-en_US-ljspeech-medium') {
+                            details.path = parts[1..-1].join('/')
+                        }
+                    }
+                    includeEmptyDirs = true
+                }
+                into assetDir
+            }
+            println "✓ Piper model ready"
+        }
     }
 }
+
+preBuild.dependsOn downloadSherpaOnnx, downloadPiperModel
 
 android {
     namespace 'com.example.talkingface'
@@ -113,33 +116,34 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
     }
 
-    // CRITICAL: Explicitly declare assets directory
     sourceSets {
         main {
             assets.srcDirs = ['src/main/assets']
+            jniLibs.srcDirs = ['libs']  // sherpa-onnx native .so files
         }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.debug
         }
     }
-    
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
-    
+
     kotlinOptions {
         jvmTarget = '1.8'
     }
-    
-    // Ensure assets are packaged into the APK
+
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
@@ -152,7 +156,6 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    
-    // Official community-maintained drop-in replacement for FFmpegKit
     implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7'
+    implementation files('libs/sherpa-onnx.aar')  // Piper TTS engine
 }
