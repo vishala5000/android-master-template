@@ -1,16 +1,11 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.VRecorder" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">#00BFFF</item>
-        <item name="colorOnPrimary">#000000</item>
-        <item name="colorPrimaryContainer">#0055FF</item>
-        <item name="colorOnPrimaryContainer">#FFFFFF</item>
-        <item name="colorSecondary">#C0C0C0</item>
+    <style name="Theme.TalkingFace" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#6200EE</item>
+        <item name="colorPrimaryVariant">#3700B3</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#03DAC6</item>
+        <item name="colorSecondaryVariant">#018786</item>
         <item name="colorOnSecondary">#000000</item>
-        <item name="colorSurface">#000000</item>
-        <item name="colorOnSurface">#FFFFFF</item>
-        <item name="colorSurfaceVariant">#121212</item>
-        <item name="colorOnSurfaceVariant">#E0E0E0</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
     </style>
 </resources>
