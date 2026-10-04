@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Allows you to trigger the build manually from the GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,18 +20,14 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.4'
 
     - name: Build and Auto-Sign Release APK
-      # This step will:
-      # 1. Run the 'downloadReleaseAssets' Gradle task to fetch files from GitHub.
-      # 2. Compile the app.
-      # 3. Automatically sign the APK using the default keystore (via apksigner).
-      # NO secrets are required.
-      run: ./gradlew assembleRelease --no-daemon
+      run: gradle assembleRelease --no-daemon
 
     - name: Upload Signed APK Artifact
       uses: actions/upload-artifact@v4
