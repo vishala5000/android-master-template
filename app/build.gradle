@@ -1,7 +1,43 @@
+import java.net.URL
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
+
+// Task to download assets from GitHub release during the build process
+task downloadReleaseAssets {
+    def assetDir = file("$projectDir/src/main/assets")
+    assetDir.mkdirs()
+    
+    def filesToDownload = [
+        "talkingface.mp4",
+        "en_US-ljspeech-medium.onnx",
+        "en_US-ljspeech-medium.onnx.json",
+        "font.ttf"
+    ]
+    def baseUrl = "https://github.com/vishala5000/android-master-template/releases/download/assets/"
+    
+    doLast {
+        filesToDownload.each { fileName ->
+            def destFile = file("$assetDir/$fileName")
+            if (!destFile.exists()) {
+                println "Downloading $fileName to assets..."
+                def url = new URL(baseUrl + fileName)
+                def connection = url.openConnection()
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                destFile.withOutputStream { out ->
+                    out << connection.getInputStream()
+                }
+            } else {
+                println "$fileName already exists in assets, skipping."
+            }
+        }
+    }
+}
+
+// Ensure assets are downloaded before the build starts
+preBuild.dependsOn downloadReleaseAssets
 
 android {
     namespace 'com.example.talkingface'
@@ -38,8 +74,6 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // FIXED: Original com.arthenica artifacts were removed from Maven Central in April 2025.
-    // This is the official community-maintained drop-in replacement (same package names/imports).
+    // Official community-maintained drop-in replacement for FFmpegKit (resolves Maven Central removal)
     implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
