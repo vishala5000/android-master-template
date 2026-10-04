@@ -1,14 +1,56 @@
-import java.net.URL
+import java.net.HttpURLConnection
 
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
 
+// Robust download function that follows redirects
+def downloadFile(String urlString, File destFile) {
+    def maxRedirects = 5
+    def currentUrl = new URL(urlString)
+    
+    for (int i = 0; i < maxRedirects; i++) {
+        HttpURLConnection connection = (HttpURLConnection) currentUrl.openConnection()
+        connection.setInstanceFollowRedirects(true)
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        connection.setConnectTimeout(30000)
+        connection.setReadTimeout(60000)
+        
+        int responseCode = connection.getResponseCode()
+        
+        if (responseCode == HttpURLConnection.HTTP_MOVED_PERM ||
+            responseCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+            responseCode == 307 || responseCode == 308) {
+            String newUrl = connection.getHeaderField("Location")
+            println "  Redirecting to: $newUrl"
+            currentUrl = new URL(newUrl)
+            connection.disconnect()
+            continue
+        }
+        
+        if (responseCode != 200) {
+            connection.disconnect()
+            throw new RuntimeException("Failed to download $urlString: HTTP $responseCode")
+        }
+        
+        destFile.parentFile.mkdirs()
+        destFile.withOutputStream { out ->
+            connection.inputStream.with { input ->
+                out << input
+            }
+        }
+        connection.disconnect()
+        println "  ✓ Downloaded ${destFile.name} (${destFile.length()} bytes)"
+        return
+    }
+    throw new RuntimeException("Too many redirects for $urlString")
+}
+
 // Task to download assets from GitHub release during the build process
 task downloadReleaseAssets {
     def assetDir = file("$projectDir/src/main/assets")
-    assetDir.mkdirs()
+    outputs.dir(assetDir)
     
     def filesToDownload = [
         "talkingface.mp4",
@@ -19,24 +61,47 @@ task downloadReleaseAssets {
     def baseUrl = "https://github.com/vishala5000/android-master-template/releases/download/assets/"
     
     doLast {
+        assetDir.mkdirs()
+        println "=== Downloading Release Assets ==="
+        println "Destination: ${assetDir.absolutePath}"
+        
         filesToDownload.each { fileName ->
             def destFile = file("$assetDir/$fileName")
-            if (!destFile.exists()) {
-                println "Downloading $fileName to assets..."
-                def url = new URL(baseUrl + fileName)
-                def connection = url.openConnection()
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-                destFile.withOutputStream { out ->
-                    out << connection.getInputStream()
+            if (!destFile.exists() || destFile.length() == 0) {
+                println "Downloading: $fileName"
+                try {
+                    downloadFile(baseUrl + fileName, destFile)
+                } catch (Exception e) {
+                    println "  ✗ ERROR downloading $fileName: ${e.message}"
+                    throw e
                 }
             } else {
-                println "$fileName already exists in assets, skipping."
+                println "✓ $fileName already exists (${destFile.length()} bytes), skipping."
             }
         }
+        
+        // Verify all files are present
+        println "=== Verifying Assets ==="
+        filesToDownload.each { fileName ->
+            def f = file("$assetDir/$fileName")
+            if (!f.exists()) {
+                throw new RuntimeException("MISSING ASSET: $fileName was not downloaded!")
+            }
+            println "✓ Verified: $fileName (${f.length()} bytes)"
+        }
+        println "=== All Assets Ready ==="
     }
 }
 
-preBuild.dependsOn downloadReleaseAssets
+// CRITICAL: Ensure assets are downloaded BEFORE Android processes them
+tasks.configureEach { task ->
+    if (task.name.startsWith('merge') && task.name.contains('Assets')) {
+        task.dependsOn downloadReleaseAssets
+    }
+    if (task.name == 'preBuild') {
+        task.dependsOn downloadReleaseAssets
+    }
+}
 
 android {
     namespace 'com.example.talkingface'
@@ -50,12 +115,17 @@ android {
         versionName "1.0"
     }
 
+    // CRITICAL: Explicitly declare assets directory
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // CRITICAL: Auto-signs the release build using the default debug keystore.
-            // This guarantees a signed APK without requiring any GitHub Secrets.
             signingConfig signingConfigs.debug
         }
     }
@@ -67,6 +137,13 @@ android {
     
     kotlinOptions {
         jvmTarget = '1.8'
+    }
+    
+    // Ensure assets are packaged into the APK
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
