@@ -1,119 +1,7 @@
-import java.net.HttpURLConnection
-
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
-
-// Robust download with redirect handling
-def downloadFile(String urlString, File destFile) {
-    def maxRedirects = 5
-    def currentUrl = new URL(urlString)
-    for (int i = 0; i < maxRedirects; i++) {
-        HttpURLConnection connection = (HttpURLConnection) currentUrl.openConnection()
-        connection.setInstanceFollowRedirects(true)
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-        connection.setConnectTimeout(30000)
-        connection.setReadTimeout(120000)
-        int responseCode = connection.getResponseCode()
-        if (responseCode == 301 || responseCode == 302 || responseCode == 307 || responseCode == 308) {
-            currentUrl = new URL(connection.getHeaderField("Location"))
-            connection.disconnect()
-            continue
-        }
-        if (responseCode != 200) {
-            connection.disconnect()
-            throw new RuntimeException("HTTP $responseCode for $urlString")
-        }
-        destFile.parentFile.mkdirs()
-        destFile.withOutputStream { out -> connection.inputStream.with { input -> out << input } }
-        connection.disconnect()
-        println "  ✓ Downloaded ${destFile.name} (${destFile.length()} bytes)"
-        return
-    }
-    throw new RuntimeException("Too many redirects for $urlString")
-}
-
-// Download sherpa-onnx Android AAR (contains Piper TTS engine + native libs)
-task downloadSherpaOnnx {
-    def libsDir = file("$projectDir/libs")
-    def aarFile = file("$libsDir/sherpa-onnx.aar")
-    outputs.file(aarFile)
-    doLast {
-        if (!aarFile.exists() || aarFile.length() == 0) {
-            libsDir.mkdirs()
-            println "=== Downloading sherpa-onnx AAR ==="
-            downloadFile(
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.10.31/sherpa-onnx-v1.10.31-android.tar.bz2",
-                file("$buildDir/sherpa-onnx.tar.bz2")
-            )
-            println "=== Extracting AAR ==="
-            copy {
-                from(tarTree(resources.bzip2(file("$buildDir/sherpa-onnx.tar.bz2")))) {
-                    // ONLY extract the .aar file. 
-                    // DO NOT extract .so files, as they are already inside the .aar 
-                    // and flattening them causes duplicate filename errors.
-                    include '**/*.aar'
-                    eachFile { details ->
-                        details.path = details.name // Flatten to just the filename
-                    }
-                    includeEmptyDirs = false
-                    duplicatesStrategy = DuplicatesStrategy.INCLUDE
-                }
-                into libsDir
-            }
-            
-            // Rename the extracted .aar to sherpa-onnx.aar
-            def foundAar = libsDir.listFiles()?.find { it.name.endsWith('.aar') }
-            if (foundAar != null && foundAar.name != 'sherpa-onnx.aar') {
-                foundAar.renameTo(aarFile)
-            }
-            
-            if (!aarFile.exists()) {
-                throw new RuntimeException("AAR not found after extraction. Files: ${libsDir.listFiles()?.join(', ')}")
-            }
-            println "✓ sherpa-onnx.aar ready"
-        } else {
-            println "✓ sherpa-onnx.aar already exists, skipping."
-        }
-    }
-}
-
-// Download Piper model (includes .onnx, tokens.txt, AND espeak-ng-data)
-task downloadPiperModel {
-    def assetDir = file("$projectDir/src/main/assets")
-    def modelFile = file("$assetDir/en_US-ljspeech-medium.onnx")
-    outputs.file(modelFile)
-    doLast {
-        if (!modelFile.exists() || modelFile.length() == 0) {
-            assetDir.mkdirs()
-            println "=== Downloading Piper model (with espeak-ng-data) ==="
-            downloadFile(
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ljspeech-medium.tar.bz2",
-                file("$buildDir/piper-model.tar.bz2")
-            )
-            println "=== Extracting model ==="
-            copy {
-                from(tarTree(resources.bzip2(file("$buildDir/piper-model.tar.bz2")))) {
-                    eachFile { details ->
-                        def parts = details.path.split('/')
-                        if (parts.length > 1 && parts[0] == 'vits-piper-en_US-ljspeech-medium') {
-                            details.path = parts[1..-1].join('/')
-                        }
-                    }
-                    includeEmptyDirs = true
-                    duplicatesStrategy = DuplicatesStrategy.INCLUDE
-                }
-                into assetDir
-            }
-            println "✓ Piper model ready"
-        } else {
-            println "✓ Piper model already exists, skipping."
-        }
-    }
-}
-
-preBuild.dependsOn downloadSherpaOnnx, downloadPiperModel
 
 android {
     namespace 'com.example.talkingface'
@@ -126,21 +14,15 @@ android {
         versionCode 1
         versionName "1.0"
         ndk {
-            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
-        }
-    }
-
-    sourceSets {
-        main {
-            assets.srcDirs = ['src/main/assets']
-            // The .aar file handles its own jniLibs automatically, no need to declare it here
+            // Match the ABI we downloaded in the GitHub Action
+            abiFilters 'arm64-v8a'
         }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.debug // Auto-signs with default keystore
         }
     }
 
@@ -160,5 +42,5 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7'
-    implementation files('libs/sherpa-onnx.aar')
+    // NO sherpa-onnx dependency needed! The .so files and Tts.kt are included directly.
 }
