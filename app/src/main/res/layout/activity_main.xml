@@ -1,92 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
-    android:fillViewport="true"
-    android:padding="16dp">
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center_horizontal">
 
-    <LinearLayout
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enter Story Text for Speech"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="12dp" />
+
+    <EditText
+        android:id="@+id/etStoryText"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:gravity="top|start"
+        android:hint="Type your story here..."
+        android:inputType="textMultiLine"
+        android:padding="12dp"
+        android:background="@android:drawable/edit_text" />
+
+    <Button
+        android:id="@+id/btnGenerate"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:gravity="center_horizontal">
+        android:layout_marginTop="24dp"
+        android:text="Generate Video"
+        android:textSize="16sp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Enter your story text below and read it aloud:"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:textColor="#00BFFF"
-            android:layout_marginBottom="8dp" />
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:visibility="gone" />
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Story Text"
-            android:textColorHint="#C0C0C0"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-            android:layout_marginBottom="16dp"
-            app:boxStrokeColor="#00BFFF"
-            app:hintTextColor="#00BFFF">
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:textAlignment="center"
+        android:textSize="14sp"
+        android:textColor="#666666" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/storyEditText"
-                android:layout_width="match_parent"
-                android:layout_height="200dp"
-                android:gravity="top|start"
-                android:inputType="textMultiLine"
-                android:textColor="#FFFFFF"
-                android:backgroundTint="#121212" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <TextView
-            android:id="@+id/statusTextView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Status: Ready"
-            android:textSize="16sp"
-            android:textColor="#FFFFFF"
-            android:layout_marginBottom="16dp"
-            android:gravity="center" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:layout_marginBottom="16dp">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/recordButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Start Recording"
-                android:backgroundTint="#00BFFF"
-                android:textColor="#000000"
-                android:layout_marginEnd="8dp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/stopButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Stop &amp; Auto-Save"
-                android:enabled="false"
-                android:backgroundTint="#FF0000"
-                android:textColor="#FFFFFF" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/savedPathTextView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="14sp"
-            android:textColor="#00BFFF"
-            android:gravity="center"
-            android:layout_marginTop="8dp" />
-
-    </LinearLayout>
-</ScrollView>
+</LinearLayout>
