@@ -11,6 +11,7 @@
     <application
         android:allowBackup="true"
         android:theme="@style/Theme.TalkingFace"
+        android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
         
         <activity
