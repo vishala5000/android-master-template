@@ -10,7 +10,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Add any other existing repositories from your master template here
     }
 }
 rootProject.name = "TalkingFace"
