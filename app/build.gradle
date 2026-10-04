@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace 'com.example.vrecorder'
+    namespace 'com.example.talkingface'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.vrecorder"
-        minSdk 24
+        applicationId "com.example.talkingface"
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
@@ -22,18 +22,13 @@ android {
         }
     }
     
-    // Required for ActivityMainBinding to work
-    buildFeatures {
-        viewBinding true
-    }
-
-    // Required for GitHub Actions Ubuntu runner compatibility
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
+    
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = '1.8'
     }
 }
 
@@ -42,4 +37,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    // FFmpeg for video generation, looping, and text overlay
+    implementation 'com.arthenica:ffmpeg-kit-full:6.0-2'
+    // OkHttp for downloading assets from GitHub releases
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
